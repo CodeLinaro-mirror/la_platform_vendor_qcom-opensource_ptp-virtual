@@ -181,7 +181,7 @@ static int PTP_VM_get_time_with_socket(struct ptp_clock_info *ptp, struct timesp
 #ifdef MEASURE_ROUNDTRIP_TIME
 	getnstimeofday(&after);
 	before_ns = before.tv_sec*1000000000LL + before.tv_nsec;
-    after_ns = after.tv_sec*1000000000LL + after.tv_nsec;
+	after_ns = after.tv_sec*1000000000LL + after.tv_nsec;
 	PTP_VIRTUAL_DEBUG_L1("%s: Socket read finished in (%lld)nano sec\n", __func__, (after_ns - before_ns));
 #endif
 	if(error<0) {
@@ -224,11 +224,12 @@ static int PTP_VM_get_time_with_vdev(struct ptp_clock_info *ptp, struct timespec
 #ifdef MEASURE_ROUNDTRIP_TIME
 	getnstimeofday(&before);
 #endif
-	memcpy(hw_ts, virtbase, sizeof(hw_ts));
+	memcpy_fromio(hw_ts, virtbase, sizeof(hw_ts));
+
 #ifdef MEASURE_ROUNDTRIP_TIME
 	getnstimeofday(&after);
 	before_ns = before.tv_sec*1000000000LL + before.tv_nsec;
-    after_ns = after.tv_sec*1000000000LL + after.tv_nsec;
+	after_ns = after.tv_sec*1000000000LL + after.tv_nsec;
 	PTP_VIRTUAL_DEBUG_L1("%s: vdev read finished in (%lld)nano sec\n", __func__, (after_ns - before_ns));
 #endif
 	ts->tv_sec = hw_ts[0];
