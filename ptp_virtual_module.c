@@ -45,9 +45,11 @@
 #include <linux/io.h>
 #include <linux/time.h>
 
+#define DWC_QOS_ETH_HANA
 //#define DEBUG_ENABLED
 //#define PTP_READ_WTIH_SOCKET
 //#define MEASURE_ROUNDTRIP_TIME
+#define PTP_READ_WTIH_PASS_THRU
 #define PTP_MV_SYSCLOCK    125000000
 
 #ifdef DEBUG_ENABLED
@@ -59,8 +61,14 @@
 
 #ifdef PTP_READ_WTIH_SOCKET
 #define PTP_VM_get_time PTP_VM_get_time_with_socket
-#else
+#endif
+
+#ifdef PTP_READ_WTIH_VDEV
 #define PTP_VM_get_time PTP_VM_get_time_with_vdev
+#endif
+
+#ifdef PTP_READ_WTIH_PASS_THRU
+#define PTP_VM_get_time PTP_VM_get_time_with_pass_through
 #endif
 
 struct ptp_clock * ptp_vm_clk;
@@ -200,7 +208,9 @@ err:
 	cscok = NULL;
 	return error;
 }
-#else
+#endif
+
+#ifdef PTP_READ_WTIH_VDEV
 static void __iomem *virtbase;
 
 static int PTP_VM_get_time_with_vdev(struct ptp_clock_info *ptp, struct timespec *ts)
@@ -238,7 +248,7 @@ static int PTP_VM_get_time_with_vdev(struct ptp_clock_info *ptp, struct timespec
 	return 0;
 }
 
-static int ptp_virtual_setup_vdev(struct device *dev_node)
+static int ptp_virtual_setup_vdev(struct device_node *dev_node)
 {
 	int32_t ret = 0;
 	uint32_t dev_addr = 0;
@@ -261,6 +271,62 @@ static void ptp_virtual_disconnect_vdev(void)
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s.\n", __func__);
 }
 
+#endif
+
+#ifdef PTP_READ_WTIH_PASS_THRU
+static void __iomem *virtbase;
+
+#define NTN_BASE_ADDRESS 0xd60a000
+
+/*Support more GMAC such as HANA EMAC*/
+#ifdef DWC_QOS_ETH_HANA
+#undef NTN_BASE_ADDRESS
+#define NTN_BASE_ADDRESS 0x20000
+#endif
+
+#define MAC_STSR_RgOffAddr ((volatile uint32_t *)(virtbase + 0xb08))
+#define MAC_STNSR_RgOffAddr ((volatile uint32_t *)(virtbase + 0xb0c))
+#define GET_VALUE(data, lbit, hbit) ((data >>lbit) & (~(~0<<(hbit-lbit+1))))
+
+static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct timespec *ts)
+{
+#ifdef MEASURE_ROUNDTRIP_TIME
+	struct timespec before;
+	struct timespec after;
+	unsigned long long before_ns;
+	unsigned long long after_ns;
+#endif
+	uint32_t ns1, ns2;
+	uint32_t varmac_stnsr;
+	uint32_t varmac_stsr;
+	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
+
+#ifdef MEASURE_ROUNDTRIP_TIME
+	getnstimeofday(&before);
+#endif
+	/* Read the nanoseconds once */
+	varmac_stnsr = ioread32((void *)MAC_STNSR_RgOffAddr);
+	ns1 = GET_VALUE(varmac_stnsr, 0, 30);
+	varmac_stsr = ioread32((void *)MAC_STSR_RgOffAddr);
+
+	/* Read the nanoseconds again */
+	varmac_stnsr = ioread32((void *)MAC_STNSR_RgOffAddr);
+	ns2 = GET_VALUE(varmac_stnsr, 0, 30);
+
+#ifdef MEASURE_ROUNDTRIP_TIME
+	getnstimeofday(&after);
+	before_ns = before.tv_sec*1000000000LL + before.tv_nsec;
+	after_ns = after.tv_sec*1000000000LL + after.tv_nsec;
+	PTP_VIRTUAL_DEBUG_L1("%s: vdev read finished in (%lld)nano sec\n", __func__, (after_ns - before_ns));
+#endif
+	ns1 = ns2;
+	PTP_VIRTUAL_DEBUG_L1("%s: varmac_stsr is %d varmac_stnsr is %d \n", __func__, varmac_stsr, varmac_stnsr);
+
+	ts->tv_sec = varmac_stsr;
+	ts->tv_nsec = ns2;
+	PTP_VIRTUAL_DEBUG_L1("Exit: %s.\n", __func__);
+	return 0;
+}
 #endif
 
 static int PTP_VM_adjust_freq(struct ptp_clock_info *ptp, s32 ppb)
@@ -327,7 +393,9 @@ static int ptp_virtual_probe(struct platform_device *pdev)
 	}
 #ifdef PTP_READ_WTIH_SOCKET
 	ret = ptp_virtual_setup_socket();
-#else
+#endif
+
+#ifdef PTP_READ_WTIH_VDEV
 	ret = ptp_virtual_setup_vdev(pdev->dev.of_node);
 #endif
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s\n", __func__);
@@ -366,7 +434,20 @@ static int __init ptp_virtual_init(void)
 	int ret = 0;
 
 	PTP_VIRTUAL_DEBUG_L1("Entry:%s.\n", __func__);
+#ifdef PTP_READ_WTIH_VDEV
 	ret = platform_driver_register(&ptp_virtual_driver);
+#endif
+#ifdef PTP_READ_WTIH_PASS_THRU
+	virtbase = ioremap(NTN_BASE_ADDRESS, 0x1000);
+	PTP_VIRTUAL_ALERT("%s: virtbase: %0x\n", __func__, virtbase);
+	ptp_vm_clk = ptp_clock_register(&PTP_VM_ptp_clock_ops, NULL);
+	if (IS_ERR(ptp_vm_clk)) {
+		PTP_VIRTUAL_ALERT("%s: ptp clock registratin failed\n", __func__);
+		ptp_vm_clk = NULL;
+	} else {
+		PTP_VIRTUAL_ALERT("%s: ptp clock registered:\n", __func__);
+	}
+#endif
 	PTP_VIRTUAL_DEBUG_L1("Exit:%s.\n", __func__);
 	return ret;
 }
@@ -376,10 +457,19 @@ static void __exit ptp_virtual_exit(void)
 	PTP_VIRTUAL_DEBUG_L1("Entry:%s.\n", __func__);
 #ifdef PTP_READ_WTIH_SOCKET
 	ptp_virtual_disconnect_socket();
-#else
+#endif
+#ifdef PTP_READ_WTIH_VDEV
 	ptp_virtual_disconnect_vdev();
 #endif
+#ifdef PTP_READ_WTIH_VDEV
 	platform_driver_unregister(&ptp_virtual_driver);
+#endif
+#ifdef PTP_READ_WTIH_PASS_THRU
+	ptp_clock_unregister(ptp_vm_clk);
+	ptp_vm_clk = NULL;
+	iounmap(virtbase);
+	virtbase = NULL;
+#endif
 	PTP_VIRTUAL_DEBUG_L1("Exit:%s.\n", __func__);
 }
 
