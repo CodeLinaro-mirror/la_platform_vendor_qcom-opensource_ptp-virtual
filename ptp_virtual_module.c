@@ -379,6 +379,7 @@ static struct ptp_clock_info PTP_VM_ptp_clock_ops = {
 };
 
 
+#ifdef PTP_READ_WTIH_VDEV
 static int ptp_virtual_probe(struct platform_device *pdev)
 {
 	int ret = 0;
@@ -418,7 +419,9 @@ static struct of_device_id ptp_virtual_match[] = {
 	},
 	{}
 };
+#endif
 
+#ifdef PTP_READ_WTIH_VDEV
 static struct platform_driver ptp_virtual_driver = {
 	.probe	= ptp_virtual_probe,
 	.remove	= ptp_virtual_remove,
@@ -428,6 +431,7 @@ static struct platform_driver ptp_virtual_driver = {
 		.of_match_table	= ptp_virtual_match,
 	},
 };
+#endif
 
 static int __init ptp_virtual_init(void)
 {
@@ -476,4 +480,4 @@ static void __exit ptp_virtual_exit(void)
 module_init(ptp_virtual_init);
 module_exit(ptp_virtual_exit);
 MODULE_LICENSE("GPL v2");
-MODULE_DEVICE_TABLE(of, ptp_virtual_match);
+//MODULE_DEVICE_TABLE(of, ptp_virtual_match);
