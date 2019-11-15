@@ -21,7 +21,7 @@
 #include <linux/device.h>
 #include <linux/net.h>
 #include <linux/ptp_clock_kernel.h>
-
+#include <linux/of.h>
 #include <linux/fs.h>
 #include <asm/uaccess.h>
 #include <linux/uio.h>
@@ -31,9 +31,11 @@
 
 #include <linux/errno.h>
 #include <linux/types.h>
-
+#include <linux/miscdevice.h>
+#include <linux/mm.h>
 #include <linux/netdevice.h>
 #include <linux/ip.h>
+#include <linux/slab.h>
 #include <linux/in.h>
 
 #include <linux/un.h>
@@ -45,6 +47,7 @@
 #include <linux/io.h>
 #include <linux/time.h>
 
+#define GPTP_GVM_SHM_MODE
 #define DWC_QOS_ETH_HANA
 //#define DEBUG_ENABLED
 //#define PTP_READ_WTIH_SOCKET
@@ -287,7 +290,6 @@ static void __iomem *virtbase;
 #define MAC_STSR_RgOffAddr ((volatile uint32_t *)(virtbase + 0xb08))
 #define MAC_STNSR_RgOffAddr ((volatile uint32_t *)(virtbase + 0xb0c))
 #define GET_VALUE(data, lbit, hbit) ((data >>lbit) & (~(~0<<(hbit-lbit+1))))
-
 static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct timespec *ts)
 {
 #ifdef MEASURE_ROUNDTRIP_TIME
@@ -378,13 +380,41 @@ static struct ptp_clock_info PTP_VM_ptp_clock_ops = {
 	.enable = PTP_VM_enable,
 };
 
+#ifdef GPTP_GVM_SHM_MODE
+static resource_size_t carveout_memory_address = 0;
+static resource_size_t carveout_memory_size = 0;
+static int ptp_virtual_get_dts_config(struct platform_device *pdev)
+{
+	int32_t ret = 0;
+	struct resource *res;
 
-#ifdef PTP_READ_WTIH_VDEV
+	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (res) {
+		carveout_memory_address = res->start;
+		carveout_memory_size = resource_size(res);
+		PTP_VIRTUAL_ALERT("%s: read reserved-addr: 0x%0x size: 0x%x\n",
+				__func__, carveout_memory_address, carveout_memory_size);
+	} else {
+		PTP_VIRTUAL_ALERT("%s: get ptp_virtual register resource failed\n", __func__);
+		return -ENODEV;
+	}
+
+	PTP_VIRTUAL_DEBUG_L1("Exit: %s\n", __func__);
+	return ret;
+}
+#endif
+
 static int ptp_virtual_probe(struct platform_device *pdev)
 {
 	int ret = 0;
 
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s\n", __func__);
+#ifdef GPTP_GVM_SHM_MODE
+	ret = ptp_virtual_get_dts_config(pdev);
+#endif
+#ifdef PTP_READ_WTIH_VDEV
 	ptp_vm_clk = ptp_clock_register(&PTP_VM_ptp_clock_ops, NULL);
 	if (IS_ERR(ptp_vm_clk)) {
 		PTP_VIRTUAL_ALERT("%s: ptp clock registratin failed\n", __func__);
@@ -392,6 +422,7 @@ static int ptp_virtual_probe(struct platform_device *pdev)
 	} else {
 		PTP_VIRTUAL_ALERT("%s: ptp clock registered:\n", __func__);
 	}
+#endif
 #ifdef PTP_READ_WTIH_SOCKET
 	ret = ptp_virtual_setup_socket();
 #endif
@@ -408,8 +439,10 @@ static int ptp_virtual_remove(struct platform_device *pdev)
 	int ret = 0;
 
 	PTP_VIRTUAL_DEBUG_L1("Entry:%s.\n", __func__);
+#ifdef PTP_READ_WTIH_VDEV
 	ptp_clock_unregister(ptp_vm_clk);
 	ptp_vm_clk = NULL;
+#endif
 	PTP_VIRTUAL_DEBUG_L1("Exit:%s.\n", __func__);
 	return ret;
 }
@@ -419,9 +452,7 @@ static struct of_device_id ptp_virtual_match[] = {
 	},
 	{}
 };
-#endif
 
-#ifdef PTP_READ_WTIH_VDEV
 static struct platform_driver ptp_virtual_driver = {
 	.probe	= ptp_virtual_probe,
 	.remove	= ptp_virtual_remove,
@@ -431,6 +462,42 @@ static struct platform_driver ptp_virtual_driver = {
 		.of_match_table	= ptp_virtual_match,
 	},
 };
+
+#ifdef GPTP_GVM_SHM_MODE
+static int gptp_shm_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+	unsigned long pfn_start = (unsigned long)(carveout_memory_address >> PAGE_SHIFT) + vma->vm_pgoff;
+	unsigned long size = vma->vm_end - vma->vm_start;
+	int ret = 0;
+
+	vma->vm_page_prot = PAGE_SHARED;
+	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+	if (size > carveout_memory_size) {
+		pr_err("MMAP size exceeds reserved memory size");
+		return -EINVAL;
+	}
+	ret = remap_pfn_range(vma, vma->vm_start, pfn_start, size, vma->vm_page_prot);
+	if (ret)
+		printk("%s: remap_pfn_range failed at [0x%lx  0x%lx]\n",
+				__func__, vma->vm_start, vma->vm_end);
+	else
+		printk("%s: map 0x%lx to 0x%lx, size: 0x%lx\n", __func__, pfn_start,
+				vma->vm_start, size);
+
+	return ret;
+}
+
+static const struct file_operations gptp_shm_fops = {
+	.owner = THIS_MODULE,
+	.mmap = gptp_shm_mmap,
+};
+
+static struct miscdevice gptp_shm_misc = {
+	.minor = MISC_DYNAMIC_MINOR,
+	.name = "gptp_shm",
+	.fops = &gptp_shm_fops,
+};
 #endif
 
 static int __init ptp_virtual_init(void)
@@ -438,8 +505,20 @@ static int __init ptp_virtual_init(void)
 	int ret = 0;
 
 	PTP_VIRTUAL_DEBUG_L1("Entry:%s.\n", __func__);
-#ifdef PTP_READ_WTIH_VDEV
+
 	ret = platform_driver_register(&ptp_virtual_driver);
+	if (unlikely(ret)) {
+		pr_err("failed to register platform driver!\n");
+	} else {
+		printk("platform_driver_register OK.\r\n");
+	}
+#ifdef GPTP_GVM_SHM_MODE
+	ret = misc_register(&gptp_shm_misc);
+	if (unlikely(ret)) {
+		pr_err("failed to register misc device!\n");
+	} else {
+		printk("misc_register OK.\r\n");
+	}
 #endif
 #ifdef PTP_READ_WTIH_PASS_THRU
 	virtbase = ioremap(NTN_BASE_ADDRESS, 0x1000);
@@ -465,14 +544,15 @@ static void __exit ptp_virtual_exit(void)
 #ifdef PTP_READ_WTIH_VDEV
 	ptp_virtual_disconnect_vdev();
 #endif
-#ifdef PTP_READ_WTIH_VDEV
 	platform_driver_unregister(&ptp_virtual_driver);
-#endif
 #ifdef PTP_READ_WTIH_PASS_THRU
 	ptp_clock_unregister(ptp_vm_clk);
 	ptp_vm_clk = NULL;
 	iounmap(virtbase);
 	virtbase = NULL;
+#endif
+#ifdef GPTP_GVM_SHM_MODE
+	misc_deregister(&gptp_shm_misc);
 #endif
 	PTP_VIRTUAL_DEBUG_L1("Exit:%s.\n", __func__);
 }
@@ -480,4 +560,4 @@ static void __exit ptp_virtual_exit(void)
 module_init(ptp_virtual_init);
 module_exit(ptp_virtual_exit);
 MODULE_LICENSE("GPL v2");
-//MODULE_DEVICE_TABLE(of, ptp_virtual_match);
+MODULE_DEVICE_TABLE(of, ptp_virtual_match);
