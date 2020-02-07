@@ -17,7 +17,6 @@ DLKM_DIR := ./device/qcom/common/dlkm
 KBUILD_OPTIONS := $(PTPVIRT_BLD_DIR)
 
 LOCAL_MODULE := ptp_virtual.ko
-LOCAL_MODULE_TAGS := debug
 
 include $(DLKM_DIR)/AndroidKernelModule.mk
 endif
