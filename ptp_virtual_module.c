@@ -466,7 +466,6 @@ static struct platform_driver ptp_virtual_driver = {
 #ifdef GPTP_GVM_SHM_MODE
 static int gptp_shm_mmap(struct file *file, struct vm_area_struct *vma)
 {
-	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
 	unsigned long pfn_start = (unsigned long)(carveout_memory_address >> PAGE_SHIFT) + vma->vm_pgoff;
 	unsigned long size = vma->vm_end - vma->vm_start;
 	int ret = 0;
