@@ -126,7 +126,7 @@ static void ptp_virtual_disconnect_socket(void)
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s.\n", __func__);
 }
 
-static int PTP_VM_get_time_with_socket(struct ptp_clock_info *ptp, struct timespec *ts)
+static int PTP_VM_get_time_with_socket(struct ptp_clock_info *ptp, struct timespec64 *ts)
 {
 	int error, request;
 	uint32_t hw_ts[2];
@@ -135,8 +135,8 @@ static int PTP_VM_get_time_with_socket(struct ptp_clock_info *ptp, struct timesp
 	mm_segment_t oldfs;
 	int size=0;
 #ifdef MEASURE_ROUNDTRIP_TIME
-	struct timespec before;
-	struct timespec after;
+	struct timespec64 before;
+	struct timespec64 after;
 	unsigned long long before_ns;
 	unsigned long long after_ns;
 #endif
@@ -216,12 +216,12 @@ err:
 #ifdef PTP_READ_WTIH_VDEV
 static void __iomem *virtbase;
 
-static int PTP_VM_get_time_with_vdev(struct ptp_clock_info *ptp, struct timespec *ts)
+static int PTP_VM_get_time_with_vdev(struct ptp_clock_info *ptp, struct timespec64 *ts)
 {
 	uint32_t hw_ts[2];
 #ifdef MEASURE_ROUNDTRIP_TIME
-	struct timespec before;
-	struct timespec after;
+	struct timespec64 before;
+	struct timespec64 after;
 	unsigned long long before_ns;
 	unsigned long long after_ns;
 #endif
@@ -290,11 +290,11 @@ static void __iomem *virtbase;
 #define MAC_STSR_RgOffAddr ((volatile uint32_t *)(virtbase + 0xb08))
 #define MAC_STNSR_RgOffAddr ((volatile uint32_t *)(virtbase + 0xb0c))
 #define GET_VALUE(data, lbit, hbit) ((data >>lbit) & (~(~0<<(hbit-lbit+1))))
-static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct timespec *ts)
+static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct timespec64 *ts)
 {
 #ifdef MEASURE_ROUNDTRIP_TIME
-	struct timespec before;
-	struct timespec after;
+	struct timespec64 before;
+	struct timespec64 after;
 	unsigned long long before_ns;
 	unsigned long long after_ns;
 #endif
@@ -346,7 +346,7 @@ static int PTP_VM_adjust_time(struct ptp_clock_info *ptp, s64 delta)
 }
 
 
-static int PTP_VM_set_time(struct ptp_clock_info *ptp, const struct timespec *ts)
+static int PTP_VM_set_time(struct ptp_clock_info *ptp, const struct timespec64 *ts)
 {
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s.\n", __func__);
