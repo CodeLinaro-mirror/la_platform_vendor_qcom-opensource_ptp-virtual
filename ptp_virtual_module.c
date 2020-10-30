@@ -47,6 +47,7 @@
 #include <linux/io.h>
 #include <linux/time.h>
 
+#define QTIMER_PASS_THRU
 #define GPTP_GVM_SHM_MODE
 #define DWC_QOS_ETH_HANA
 //#define DEBUG_ENABLED
@@ -278,6 +279,12 @@ static void ptp_virtual_disconnect_vdev(void)
 
 #ifdef PTP_READ_WTIH_PASS_THRU
 static void __iomem *virtbase;
+//#ifdef QTIMER_PASS_THRU
+#define QTMR0_F0V2_QTMR_V2_ADDR 0x17C23000
+#define QTMR0_F0V2_QTMR_V2_SIZE 0x1000
+static void __iomem *qtimer_virtbase;
+static void __iomem *gptp_virtbase;
+//#endif
 
 #define NTN_BASE_ADDRESS 0xd60a000
 
@@ -301,6 +308,42 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct 
 	uint32_t ns1, ns2;
 	uint32_t varmac_stnsr;
 	uint32_t varmac_stsr;
+
+#ifdef QTIMER_PASS_THRU
+	unsigned long long gvm_tick, host_tick, local_gptp, cur_gptp;
+	uint32_t gvm_tick_lo,gvm_tick_hi, host_tick_lo, host_tick_hi, local_gptp_lo, local_gptp_hi;
+	uint32_t reminder;
+	uint32_t local_qtimer_offset_lo=0, local_qtimer_offset_hi=0;
+	long long local_bypqtimer_offset = 0;
+	unsigned long long cur_qtimer_ns = 0, cur_qtimer_s = 0;
+
+	local_qtimer_offset_lo = ioread32((void *)(((volatile uint32_t *)(gptp_virtbase + 0x1000 -2 * 8))));
+	local_qtimer_offset_hi = ioread32((void *)(((volatile uint32_t *)(gptp_virtbase + 0x1000 -2 * 8 + 4))));
+	gvm_tick_lo = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase))));
+	gvm_tick_hi = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase + 4))));
+	//host_tick_lo = ioread32((void *)(((volatile uint32_t *)(gptp_virtbase + 0x1000 - 8))));
+	//host_tick_hi = ioread32((void *)(((volatile uint32_t *)(gptp_virtbase + 0x1000 - 4))));
+
+	//local_gptp_lo = ioread32((void *)(((volatile uint32_t *)(gptp_virtbase + 56))));
+	//local_gptp_hi = ioread32((void *)(((volatile uint32_t *)(gptp_virtbase + 56 + 4))));
+
+	local_bypqtimer_offset = (long long)((unsigned long long)local_qtimer_offset_lo | ((unsigned long long)local_qtimer_offset_hi << 32));
+	gvm_tick = (unsigned long long)((unsigned long long)gvm_tick_lo | ((unsigned long long)gvm_tick_hi << 32));
+	cur_qtimer_s = (gvm_tick / 19200000ULL);
+	cur_qtimer_ns = (gvm_tick % 19200000ULL);
+	cur_qtimer_ns *= 1000000000ULL;
+	cur_qtimer_ns /= 19200000ULL;
+	cur_qtimer_ns += (cur_qtimer_s * 1000000000);
+	//host_tick = (unsigned long long)((unsigned long long)host_tick_lo | ((unsigned long long)host_tick_hi << 32));
+	//local_gptp = (unsigned long long)(local_gptp_lo) | (((unsigned long long)(local_gptp_hi)) << 32);
+	//cur_gptp = (((gvm_tick - host_tick) * 1000000000ull)/19200000ull) + local_gptp;
+	cur_gptp = (unsigned long long)(cur_qtimer_ns - local_bypqtimer_offset);
+
+	ts->tv_sec = div_u64_rem(cur_gptp, 1000000000ULL, &reminder);
+	ts->tv_nsec = reminder;
+
+	return 0;
+#endif
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
 
 #ifdef MEASURE_ROUNDTRIP_TIME
@@ -497,6 +540,42 @@ static struct miscdevice gptp_shm_misc = {
 	.name = "gptp_shm",
 	.fops = &gptp_shm_fops,
 };
+
+/*
+static int qtimer_shm_mmap(struct file *file, struct vm_area_struct *vma)
+{
+        unsigned long pfn_start = (unsigned long)(QTMR0_F0V2_QTMR_V2_ADDR >> PAGE_SHIFT) + vma->vm_pgoff;
+        unsigned long size = vma->vm_end - vma->vm_start;
+        int ret = 0;
+
+        vma->vm_page_prot = PAGE_SHARED;
+        vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+        if (size > QTMR0_F0V2_QTMR_V2_SIZE) {
+                pr_err("MMAP qtimer size exceeds reserved memory size");
+                return -EINVAL;
+        }
+        ret = remap_pfn_range(vma, vma->vm_start, pfn_start, size, vma->vm_page_prot);
+        if (ret)
+                printk("%s: remap_pfn_range qtimer failed at [0x%lx  0x%lx]\n",
+                                __func__, vma->vm_start, vma->vm_end);
+        else
+                printk("%s: map 0x%lx to 0x%lx, size: 0x%lx\n", __func__, pfn_start,
+                                vma->vm_start, size);
+
+        return ret;
+}
+
+static const struct file_operations qtimer_shm_fops = {
+        .owner = THIS_MODULE,
+        .mmap = qtimer_shm_mmap,
+};
+
+static struct miscdevice qtimer_shm_misc = {
+        .minor = MISC_DYNAMIC_MINOR,
+        .name = "qtimer_shm",
+        .fops = &qtimer_shm_fops,
+};
+*/
 #endif
 
 static int __init ptp_virtual_init(void)
@@ -518,10 +597,28 @@ static int __init ptp_virtual_init(void)
 	} else {
 		printk("misc_register OK.\r\n");
 	}
+/*
+	ret = misc_register(&qtimer_shm_misc);
+	if (unlikely(ret)) {
+		pr_err("failed to register qtimer misc device!\n");
+	} else {
+		printk("misc_register qtimer OK.\r\n");
+	}
+*/
 #endif
 #ifdef PTP_READ_WTIH_PASS_THRU
 	virtbase = ioremap(NTN_BASE_ADDRESS, 0x1000);
 	PTP_VIRTUAL_ALERT("%s: virtbase: %0x\n", __func__, virtbase);
+#ifdef QTIMER_PASS_THRU
+	qtimer_virtbase = ioremap(QTMR0_F0V2_QTMR_V2_ADDR, QTMR0_F0V2_QTMR_V2_SIZE);
+	PTP_VIRTUAL_ALERT("%s: qtimer_virtbase: %0x\n", __func__, qtimer_virtbase);
+	if (carveout_memory_address) {
+		gptp_virtbase = ioremap(carveout_memory_address, 0x1000);
+		PTP_VIRTUAL_ALERT("%s: gptp_virtbase: %0x\n", __func__, gptp_virtbase);
+	}
+	if (!qtimer_virtbase || !gptp_virtbase)
+		PTP_VIRTUAL_ALERT("%s: ioremap qtimer and gptp memory failed\n", __func__);
+#endif
 	ptp_vm_clk = ptp_clock_register(&PTP_VM_ptp_clock_ops, NULL);
 	if (IS_ERR(ptp_vm_clk)) {
 		PTP_VIRTUAL_ALERT("%s: ptp clock registratin failed\n", __func__);
@@ -549,6 +646,12 @@ static void __exit ptp_virtual_exit(void)
 	ptp_vm_clk = NULL;
 	iounmap(virtbase);
 	virtbase = NULL;
+#ifdef QTIMER_PASS_THRU
+	iounmap(qtimer_virtbase);
+	virtbase = NULL;
+	iounmap(gptp_virtbase);
+	virtbase = NULL;
+#endif
 #endif
 #ifdef GPTP_GVM_SHM_MODE
 	misc_deregister(&gptp_shm_misc);
