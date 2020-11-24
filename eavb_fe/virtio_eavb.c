@@ -263,6 +263,7 @@ static int send_msg(struct virtio_eavb_priv *priv, struct fe_msg *msg)
 	}
 	virtqueue_kick(priv->rvq);
 
+	vhdr->msgid = msg->msgid;
 	sg_init_one(sg, vhdr, vhdr->len);
 	ret = virtqueue_add_outbuf(priv->svq, sg, 1, vhdr, GFP_KERNEL);
 	if (ret) {
@@ -278,7 +279,9 @@ static int send_msg(struct virtio_eavb_priv *priv, struct fe_msg *msg)
 		LOG_EAVB(MODULE_TX, LEVEL_ERR, "%s(%d) timeout\n", __func__, __LINE__);
 		return -ETIMEDOUT;
 	}
-	virtqueue_get_buf(priv->svq, &len) ; //remove a used txbuf
+	mutex_lock(&priv->lock);
+	virtqueue_get_buf(priv->svq, &len); //remove a used txbuf
+	mutex_unlock(&priv->lock);
 
 	rsp = msg->rxbuf;
 	if (rsp) {
