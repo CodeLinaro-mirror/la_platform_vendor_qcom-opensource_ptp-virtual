@@ -23,6 +23,7 @@
 
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <soc/qcom/boot_stats.h>
 #include "eavb_shared.h"
 
 #include "vio_eavb.h"
@@ -1044,6 +1045,7 @@ static int virtio_eavb_probe(struct virtio_device *vdev)
 
 	virtqueue_enable_cb(priv->rvq);
 
+	place_marker("M - DRIVER EAVB FE Ready");
 	return 0;
 
 device_create_fail:
@@ -1100,6 +1102,7 @@ static struct virtio_driver virtio_eavb_driver = {
 
 static int __init virtio_eavb_init(void)
 {
+	place_marker("M - DRIVER EAVB FE Init");
 	return register_virtio_driver(&virtio_eavb_driver);
 }
 
