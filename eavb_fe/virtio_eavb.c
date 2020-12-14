@@ -55,10 +55,11 @@ static unsigned int log_module = MODULE_ALL;
 module_param(log_level, uint, S_IRUGO);
 module_param(log_module, uint, S_IRUGO);
 
+char* prix [] = {"", "debug", "info", "error"};
 #define LOG_EAVB(modle, level, format, args...) \
 do { \
 	if (((modle) & log_module) && ((level) >= log_level)) { \
-		printk(format, ## args); \
+		printk("pid %.8x: %s: %s(%d) "format, current->pid, prix[0x3 & (level)], __func__, __LINE__, ## args); \
 	} \
 } while(0)
 
@@ -76,6 +77,7 @@ struct virtio_eavb_priv {
 	struct virtio_device *vdev;
 	struct virtqueue     *svq;
 	struct virtqueue     *rvq;
+	spinlock_t rvqlock;
 
 	bool has_shmem;
 
@@ -88,8 +90,11 @@ struct virtio_eavb_priv {
 	int file_index;
 
 	spinlock_t msglock;
-#define FE_MSG_MAX               256
+#define FE_MSG_MAX 		256 //1<<8
+#define mod(index) 		((index) & 0xff)  //((index) % FE_MSG_MAX)
 	struct fe_msg *msgtable[FE_MSG_MAX];
+#define RX_BUF_MAX_LEN 		1024
+	void *rxbufs[FE_MSG_MAX];
 };
 
 struct mapping {
@@ -186,6 +191,8 @@ struct fe_msg {
 	void *rxbuf;
 	u32 txbuf_size;
 	u32 rxbuf_size;
+	u32 txbuf_used;
+	u32 rxbuf_used;
 };
 
 static struct fe_msg *virt_alloc_msg(struct virtio_eavb_priv *priv, int tsize, int rsize)
@@ -194,19 +201,21 @@ static struct fe_msg *virt_alloc_msg(struct virtio_eavb_priv *priv, int tsize, i
 	unsigned long flags;
 	u8 *buf;
 	int i;
+	static int next = 0;
 
+	ASSERT(rsize < RX_BUF_MAX_LEN);
 	//kzalloc needn't memset 0
-	msg = kzalloc(sizeof(*msg) + tsize + rsize, GFP_KERNEL);
+	msg = kzalloc(sizeof(*msg) + tsize, GFP_KERNEL);
 	if (!msg) {
-		LOG_EAVB(MODULE_TX, LEVEL_ERR, "%s: cannot alloc memory\n", __func__);
+		LOG_EAVB(MODULE_TX, LEVEL_ERR, "cannot alloc memory\n");
 		return NULL;
 	}
 
 	spin_lock_irqsave(&priv->msglock, flags);
 	for (i = 0; i < FE_MSG_MAX; i++) {
-		if (!priv->msgtable[i]) {
-			priv->msgtable[i] = msg;
-			msg->msgid = i;
+		if (!priv->msgtable[mod(next + i)]) {
+			priv->msgtable[mod(next + i)] = msg;
+			msg->msgid = mod(next + i);
 			break;
 		}
 	}
@@ -220,11 +229,10 @@ static struct fe_msg *virt_alloc_msg(struct virtio_eavb_priv *priv, int tsize, i
 
 	buf = (u8 *)(msg + 1);
 	msg->txbuf = buf;
-	msg->rxbuf = buf + tsize;
 	msg->txbuf_size = tsize;
-	msg->rxbuf_size = rsize;
 	init_completion(&msg->work);
 
+	next = mod(msg->msgid + 1);
 	return msg;
 }
 
@@ -232,14 +240,27 @@ static void virt_free_msg(struct virtio_eavb_priv *priv, struct fe_msg *msg)
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&priv->msglock, flags);
-	if (priv->msgtable[msg->msgid] == msg)
-		priv->msgtable[msg->msgid] = NULL;
-	else
-		LOG_EAVB(MODULE_TX, LEVEL_ERR, "can't find msg %d in table\n", msg->msgid);
-	spin_unlock_irqrestore(&priv->msglock, flags);
+	if (msg->txbuf_used && msg->rxbuf_used) {
+		struct scatterlist sg;
+		u8 *rsp = msg->rxbuf;
 
-	kfree(msg);
+		sg_init_one(&sg, rsp, RX_BUF_MAX_LEN);
+		spin_lock_irqsave(&priv->rvqlock, flags);
+		virtqueue_add_inbuf(priv->rvq, &sg, 1, rsp, GFP_KERNEL);
+		virtqueue_kick(priv->rvq);
+		spin_unlock_irqrestore(&priv->rvqlock, flags);
+
+		spin_lock_irqsave(&priv->msglock, flags);
+		if (priv->msgtable[msg->msgid] == msg)
+			priv->msgtable[msg->msgid] = NULL;
+		else
+			LOG_EAVB(MODULE_TX, LEVEL_ERR, "can't find msg %d in table\n", msg->msgid);
+		spin_unlock_irqrestore(&priv->msglock, flags);
+
+		kfree(msg);
+	} else {
+		LOG_EAVB(MODULE_TX, LEVEL_DEBUG, "msgid %d (tx %d, rx %d) buf not used\n", msg->msgid, msg->txbuf_used, msg->rxbuf_used);
+	}
 }
 
 static int send_msg(struct virtio_eavb_priv *priv, struct fe_msg *msg)
@@ -247,23 +268,14 @@ static int send_msg(struct virtio_eavb_priv *priv, struct fe_msg *msg)
 	struct vio_msg_hdr *vhdr, *rsp;
 	struct scatterlist sg[1];
 	int ret;
+	int rsv;
 	unsigned int len;
 
 	vhdr = (struct vio_msg_hdr *)msg->txbuf;
-	rsp = (struct vio_msg_hdr *)msg->rxbuf;
 	msg->rxbuf = NULL;
 
-	LOG_EAVB(MODULE_TX, LEVEL_DEBUG, "%s(%d) \n", __func__, __LINE__);
+	LOG_EAVB(MODULE_TX, LEVEL_DEBUG, "msgid %d\n", msg->msgid);
 	mutex_lock(&priv->lock);
-	sg_init_one(sg, rsp, msg->rxbuf_size);
-	ret = virtqueue_add_inbuf(priv->rvq, sg, 1, rsp, GFP_KERNEL);
-	if (ret) {
-		LOG_EAVB(MODULE_TX, LEVEL_ERR, "fail to add input buffer, return (%d)\n", ret);
-		mutex_unlock(&priv->lock);
-		return ret;
-	}
-	virtqueue_kick(priv->rvq);
-
 	vhdr->msgid = msg->msgid;
 	sg_init_one(sg, vhdr, vhdr->len);
 	ret = virtqueue_add_outbuf(priv->svq, sg, 1, vhdr, GFP_KERNEL);
@@ -275,20 +287,44 @@ static int send_msg(struct virtio_eavb_priv *priv, struct fe_msg *msg)
 	virtqueue_kick(priv->svq);
 	mutex_unlock(&priv->lock);
 
-	ret = wait_for_completion_timeout(&msg->work, 1000);
-	if (ret == 0) {
-		LOG_EAVB(MODULE_TX, LEVEL_ERR, "%s(%d) timeout\n", __func__, __LINE__);
+	rsv = wait_for_completion_timeout(&msg->work, msecs_to_jiffies(1000));
+	if (rsv == 0) {
+		LOG_EAVB(MODULE_TX, LEVEL_ERR, "msgid %d timeout\n", msg->msgid);
 		return -ETIMEDOUT;
 	}
-	mutex_lock(&priv->lock);
-	virtqueue_get_buf(priv->svq, &len); //remove a used txbuf
-	mutex_unlock(&priv->lock);
+
+	if ( 0 == msg->txbuf_used) {
+		while (1) {
+			struct fe_msg *used;
+
+			mutex_lock(&priv->lock);
+			vhdr = virtqueue_get_buf(priv->svq, &len); //remove a used txbuf
+			mutex_unlock(&priv->lock);
+
+			if (!vhdr) break;
+
+			ASSERT(vhdr->len == len);
+			used = priv->msgtable[vhdr->msgid];
+			if (!used) {
+				LOG_EAVB(MODULE_TX, LEVEL_ERR, "msgid %d used txbuf found no msg\n", vhdr->msgid);
+				continue;
+			}
+			ASSERT(used->msgid == vhdr->msgid);
+			used->txbuf_used = 1;
+			LOG_EAVB(MODULE_TX, LEVEL_DEBUG, "msgid %d txbuf used\n", used->msgid);
+		}
+	}
+
+	if (0 == msg->txbuf_used) {
+		LOG_EAVB(MODULE_TX, LEVEL_ERR, "msgid %d txbuf not used\n", msg->msgid);
+		ret = -1;
+	}
 
 	rsp = msg->rxbuf;
 	if (rsp) {
-		LOG_EAVB(MODULE_TX, LEVEL_DEBUG, "%s(%d) result = %d\n", __func__, __LINE__, rsp->result);
+		LOG_EAVB(MODULE_TX, LEVEL_DEBUG, "msgid %d, result = %d\n", msg->msgid, rsp->result);
 	}
-	return 0;
+	return ret;
 }
 
 static int virtio_eavb_open(struct inode *inode, struct file *file)
@@ -297,10 +333,9 @@ static int virtio_eavb_open(struct inode *inode, struct file *file)
 	struct virtio_eavb_priv *priv = container_of(cdev, struct virtio_eavb_priv, cdev);
 	struct eavb_file *fl;
 
-	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "%s(%d)\n", __func__, __LINE__);
 	fl = kzalloc(sizeof(*fl), GFP_KERNEL);
 	if (!fl) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) malloc fail\n", __func__, __LINE__);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "malloc fail\n");
 		return -ENOMEM;
 	}
 
@@ -311,6 +346,7 @@ static int virtio_eavb_open(struct inode *inode, struct file *file)
 	spin_lock_init(&fl->streamlock);
 
 	fl->index = priv->file_index++;
+	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "fl->index=%d\n", fl->index);
 	return 0;
 }
 
@@ -320,7 +356,7 @@ static int virtio_eavb_release(struct inode *inode, struct file *file)
 	struct virtio_eavb_priv *priv = fl->priv;
 	int i;
 
-	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "%s(%d) index=%d\n", __func__, __LINE__, fl->index);
+	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "fl->index=%d\n", fl->index);
 	for (i=0; i<MAX_STREAM_NUM; i++) {
 		uint64_t hdl = fl->stream[i].hdl;
 		int32_t idx = fl->stream[i].idx;
@@ -377,6 +413,7 @@ static int virtio_eavb_release(struct inode *inode, struct file *file)
 	memset(fl->mapping, 0, sizeof(fl->mapping));
 	fl->mapping_count = 0;
 
+	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "fl->index=%d\n", fl->index);
 	kfree(fl);
 	return 0;
 }
@@ -393,20 +430,20 @@ static int qavb_create_stream(struct eavb_file *fl, void __user *buf)
 	int ret;
 
 	copy_from_user(&create, buf, sizeof(create));
-	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "%s(%d) index=%d\n", __func__, __LINE__, fl->index);
+	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "fl->index=%d\n", fl->index);
 
 	spin_lock(&fl->streamlock);
 	index = getStreamIndex(fl, 0);
 	spin_unlock(&fl->streamlock);
 	if (index >= MAX_STREAM_NUM) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) stream full \n", __func__, __LINE__);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "stream full\n");
 		return -EINVAL;
 	}
 
 	tsize = rsize = sizeof(struct vio_create_stream_msg);
 	msg = virt_alloc_msg(priv, tsize, rsize);
 	if (!msg) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) alloc msg fail!\n", __func__, __LINE__);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "stream%d alloc msg fail!\n", index);
 		return -ENOMEM;
 	}
 
@@ -418,7 +455,9 @@ static int qavb_create_stream(struct eavb_file *fl, void __user *buf)
 	vmsg = (struct vio_create_stream_msg *)vhdr;
 	memcpy(&vmsg->cfg, &create.config, sizeof(struct vio_stream_config));
 
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "(%d:%d:%d)\n", fl->index, index, msg->msgid);
 	ret = send_msg(priv, msg);
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "(%d:%d:%d) ret=%d\n", fl->index, index, msg->msgid, ret);
 
 	vhdr = (struct vio_msg_hdr *)msg->rxbuf;
 	if (!ret && vhdr) {
@@ -430,6 +469,7 @@ static int qavb_create_stream(struct eavb_file *fl, void __user *buf)
 		fl->stream[index].hdl = vhdr->streamctx_hdl;
 		fl->stream[index].idx = vhdr->stream_idx;
 		fl->stream[index].status = CREATED;
+		LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "stream%d (ctx 0x%llx, idx %d)\n", index, vhdr->streamctx_hdl, vhdr->stream_idx);
 	}
 
 	virt_free_msg(priv, msg);
@@ -451,20 +491,20 @@ static int qavb_create_stream_with_path(struct eavb_file *fl, void __user *buf)
 	int ret;
 
 	copy_from_user(&create, buf, sizeof(create));
-	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "%s(%d) index=%d\n", __func__, __LINE__, fl->index);
+	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "fl->index=%d\n", fl->index);
 
 	spin_lock(&fl->streamlock);
 	index = getStreamIndex(fl, 0);
 	spin_unlock(&fl->streamlock);
 	if (index >= MAX_STREAM_NUM) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) stream full \n", __func__, __LINE__);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "stream full\n");
 		return -EINVAL;
 	}
 
 	tsize = rsize = sizeof(struct vio_create_stream_path_msg);
 	msg = virt_alloc_msg(priv, tsize, rsize);
 	if (!msg) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) alloc msg fail!\n", __func__, __LINE__);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "stream%d alloc msg fail!\n", index);
 		return -ENOMEM;
 	}
 
@@ -475,7 +515,9 @@ static int qavb_create_stream_with_path(struct eavb_file *fl, void __user *buf)
 	vmsg = (struct vio_create_stream_path_msg *)vhdr;
 	memcpy(vmsg->path, create.path, MAX_CONFIG_FILE_PATH);
 
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "(%d:%d:%d)\n", fl->index, index, msg->msgid);
 	ret = send_msg(priv, msg);
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "(%d:%d:%d) ret=%d\n", fl->index, index, msg->msgid, ret);
 
 	vhdr = (struct vio_msg_hdr *)msg->rxbuf;
 	if (!ret && vhdr) {
@@ -487,6 +529,7 @@ static int qavb_create_stream_with_path(struct eavb_file *fl, void __user *buf)
 		fl->stream[index].hdl = vhdr->streamctx_hdl;
 		fl->stream[index].idx = vhdr->stream_idx;
 		fl->stream[index].status = CREATED;
+		LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "stream%d (ctx 0x%llx, idx %d)\n", index, vhdr->streamctx_hdl, vhdr->stream_idx);
 	}
 
 	virt_free_msg(priv, msg);
@@ -512,14 +555,14 @@ static int qavb_destroy_stream(struct eavb_file *fl, void __user *buf)
 	index = getStreamIndex(fl, destroy.hdr.streamCtx);
 	spin_unlock(&fl->streamlock);
 	if (index >= MAX_STREAM_NUM) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) invalid streamCtx=0x%llx\n", __func__, __LINE__, destroy.hdr.streamCtx);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "invalid streamCtx=0x%llx\n", destroy.hdr.streamCtx);
 		return -EINVAL;
 	}
 
 	tsize = rsize = sizeof(struct vio_destroy_stream_msg);
 	msg = virt_alloc_msg(priv, tsize, rsize);
 	if (!msg) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) alloc msg fail!\n", __func__, __LINE__);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "stream%d alloc msg fail!\n", index);
 		return -ENOMEM;
 	}
 
@@ -529,7 +572,9 @@ static int qavb_destroy_stream(struct eavb_file *fl, void __user *buf)
 	vhdr->streamctx_hdl = fl->stream[index].hdl;
 	vhdr->stream_idx = fl->stream[index].idx;
 
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "(%d:%d:%d)\n", fl->index, index, msg->msgid);
 	ret = send_msg(priv, msg);
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "(%d:%d:%d) ret=%d\n", fl->index, index, msg->msgid, ret);
 
 	vhdr = (struct vio_msg_hdr *)msg->rxbuf;
 	if (!ret && vhdr) {
@@ -556,20 +601,20 @@ static int qavb_get_stream_info(struct eavb_file *fl, void __user *buf)
 	int ret;
 
 	copy_from_user(&get_info, buf, sizeof(get_info));
-	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "%s(%d) streamCtx=0x%llx\n", __func__, __LINE__, get_info.hdr.streamCtx);
+	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "streamCtx=0x%llx\n", get_info.hdr.streamCtx);
 
 	spin_lock(&fl->streamlock);
 	index = getStreamIndex(fl, get_info.hdr.streamCtx);
 	spin_unlock(&fl->streamlock);
 	if (index >= MAX_STREAM_NUM) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) invalid streamCtx=0x%llx\n", __func__, __LINE__, get_info.hdr.streamCtx);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "invalid streamCtx=0x%llx\n", get_info.hdr.streamCtx);
 		return -EINVAL;
 	}
 
 	tsize = rsize = sizeof(struct vio_get_stream_info_msg);
 	msg = virt_alloc_msg(priv, tsize, rsize);
 	if (!msg) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) alloc msg fail!\n", __func__, __LINE__);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "stream%d alloc msg fail!\n", index);
 		return -ENOMEM;
 	}
 
@@ -579,7 +624,9 @@ static int qavb_get_stream_info(struct eavb_file *fl, void __user *buf)
 	vhdr->streamctx_hdl = fl->stream[index].hdl;
 	vhdr->stream_idx = fl->stream[index].idx;
 
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "(%d:%d:%d)\n", fl->index, index, msg->msgid);
 	ret = send_msg(priv, msg);
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "(%d:%d:%d) ret=%d\n", fl->index, index, msg->msgid, ret);
 
 	vhdr = (struct vio_msg_hdr *)msg->rxbuf;
 	if (!ret && vhdr) {
@@ -598,12 +645,12 @@ static int qavb_get_stream_info(struct eavb_file *fl, void __user *buf)
 
 static int qavb_mmap(struct eavb_file *fl, void __user *buf)
 {
-	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "%s(%d) not support\n", __func__, __LINE__);
+	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "not support\n");
 	return 0;
 }
 static int qavb_munmap(struct eavb_file *fl, void __user *buf)
 {
-	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "%s(%d) not support\n", __func__, __LINE__);
+	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "not support\n");
 	return 0;
 }
 
@@ -618,20 +665,20 @@ static int qavb_connect_stream(struct eavb_file *fl, void __user *buf)
 	int ret;
 
 	copy_from_user(&connect, buf, sizeof(connect));
-	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "%s(%d) streamCtx=0x%llx\n", __func__, __LINE__, connect.hdr.streamCtx);
+	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "streamCtx=0x%llx\n", connect.hdr.streamCtx);
 
 	spin_lock(&fl->streamlock);
 	index = getStreamIndex(fl, connect.hdr.streamCtx);
 	spin_unlock(&fl->streamlock);
 	if (index >= MAX_STREAM_NUM) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) invalid streamCtx=0x%llx\n", __func__, __LINE__, connect.hdr.streamCtx);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "invalid streamCtx=0x%llx\n", connect.hdr.streamCtx);
 		return -EINVAL;
 	}
 
 	tsize = rsize = sizeof(struct vio_connect_stream_msg);
 	msg = virt_alloc_msg(priv, tsize, rsize);
 	if (!msg) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) alloc msg fail!\n", __func__, __LINE__);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "stream%d alloc msg fail!\n", index);
 		return -ENOMEM;
 	}
 
@@ -641,7 +688,10 @@ static int qavb_connect_stream(struct eavb_file *fl, void __user *buf)
 	vhdr->streamctx_hdl = fl->stream[index].hdl;
 	vhdr->stream_idx = fl->stream[index].idx;
 
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "(%d:%d:%d)\n", fl->index, index, msg->msgid);
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "stream%d (ctx 0x%llx, idx %d)\n", index, vhdr->streamctx_hdl, vhdr->stream_idx);
 	ret = send_msg(priv, msg);
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "(%d:%d:%d) ret=%d\n", fl->index, index, msg->msgid, ret);
 
 	vhdr = (struct vio_msg_hdr *)msg->rxbuf;
 	if (!ret && vhdr) {
@@ -665,20 +715,20 @@ static int qavb_disconnect_stream(struct eavb_file *fl, void __user *buf)
 	int ret;
 
 	copy_from_user(&disconnect, buf, sizeof(disconnect));
-	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "%s(%d) streamCtx=0x%llx\n", __func__, __LINE__, disconnect.hdr.streamCtx);
+	LOG_EAVB(MODULE_SETUP, LEVEL_INFO, "streamCtx=0x%llx\n", disconnect.hdr.streamCtx);
 
 	spin_lock(&fl->streamlock);
 	index = getStreamIndex(fl, disconnect.hdr.streamCtx);
 	spin_unlock(&fl->streamlock);
 	if (index >= MAX_STREAM_NUM) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) invalid streamCtx=0x%llx\n", __func__, __LINE__, disconnect.hdr.streamCtx);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "invalid streamCtx=0x%llx\n", disconnect.hdr.streamCtx);
 		return -EINVAL;
 	}
 
 	tsize = rsize = sizeof(struct vio_disconnect_stream_msg);
 	msg = virt_alloc_msg(priv, tsize, rsize);
 	if (!msg) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) alloc msg fail!\n", __func__, __LINE__);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "stream%d alloc msg fail!\n", index);
 		return -ENOMEM;
 	}
 
@@ -688,7 +738,10 @@ static int qavb_disconnect_stream(struct eavb_file *fl, void __user *buf)
 	vhdr->streamctx_hdl = fl->stream[index].hdl;
 	vhdr->stream_idx = fl->stream[index].idx;
 
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "(%d:%d:%d)\n", fl->index, index, msg->msgid);
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "stream%d (ctx 0x%llx, idx %d)\n", index, vhdr->streamctx_hdl, vhdr->stream_idx);
 	ret = send_msg(priv, msg);
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "(%d:%d:%d) ret=%d\n", fl->index, index, msg->msgid, ret);
 
 	vhdr = (struct vio_msg_hdr *)msg->rxbuf;
 	if (!ret && vhdr) {
@@ -716,7 +769,7 @@ static int qavb_receive(struct eavb_file *fl, void __user *buf)
 	copy_from_user(&receive, buf, sizeof(receive));
 	mapping_index = get_mapping_idx(fl, receive.data.pbuf, receive.data.hdr.payload_size);
 	if (mapping_index >= MAPPING_MAX) {
-		LOG_EAVB(MODULE_RX, LEVEL_ERR, "%s(%d) invalid buf address 0x%llx\n", __func__, __LINE__, receive.data.pbuf);
+		LOG_EAVB(MODULE_RX, LEVEL_ERR, "invalid buf address 0x%llx\n", receive.data.pbuf);
 		return -EINVAL;
 	}
 
@@ -724,14 +777,14 @@ static int qavb_receive(struct eavb_file *fl, void __user *buf)
 	stream_index = getStreamIndex(fl, receive.hdr.streamCtx);
 	spin_unlock(&fl->streamlock);
 	if (stream_index >= MAX_STREAM_NUM) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) invalid streamCtx=0x%llx\n", __func__, __LINE__, receive.hdr.streamCtx);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "invalid streamCtx=0x%llx\n", receive.hdr.streamCtx);
 		return -EINVAL;
 	}
 
 	tsize = rsize = sizeof(struct vio_receive_msg);
 	msg = virt_alloc_msg(priv, tsize, rsize);
 	if (!msg) {
-		LOG_EAVB(MODULE_RX, LEVEL_ERR, "%s(%d) alloc msg fail!\n", __func__, __LINE__);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "stream%d alloc msg fail!\n", stream_index);
 		return -ENOMEM;
 	}
 
@@ -746,7 +799,8 @@ static int qavb_receive(struct eavb_file *fl, void __user *buf)
 	memcpy(&vmsg->data, &receive.data, sizeof(struct eavb_buf_data));
 
 	vmsg->data.gpa = get_mapping_phyaddr(fl, receive.data.pbuf, mapping_index);
-	LOG_EAVB(MODULE_RX, LEVEL_DEBUG, "%s(%d) pass phy address 0x%llx\n", __func__, __LINE__, vmsg->data.gpa);
+	LOG_EAVB(MODULE_RX, LEVEL_DEBUG, "pass phy address 0x%llx\n", vmsg->data.gpa);
+	LOG_EAVB(MODULE_RX, LEVEL_DEBUG, "stream%d (ctx 0x%llx, idx %d)\n", stream_index, vhdr->streamctx_hdl, vhdr->stream_idx);
 
 	ret = send_msg(priv, msg);
 
@@ -768,7 +822,6 @@ static int qavb_recv_done(struct eavb_file *fl, void __user *buf)
 {
 	struct eavb_ioctl_recv_done done;
 	copy_from_user(&done, buf, sizeof(done));
-	LOG_EAVB(MODULE_RX, LEVEL_DEBUG, "%s(%d)\n", __func__, __LINE__);
 
 	return 0;
 }
@@ -788,7 +841,7 @@ static int qavb_transmit(struct eavb_file *fl, void __user *buf)
 	copy_from_user(&transmit, buf, sizeof(transmit));
 	mapping_index = get_mapping_idx(fl, transmit.data.pbuf, transmit.data.hdr.payload_size);
 	if (mapping_index >= MAPPING_MAX) {
-		LOG_EAVB(MODULE_RX, LEVEL_ERR, "%s(%d) invalid buf address 0x%llx\n", __func__, __LINE__, transmit.data.pbuf);
+		LOG_EAVB(MODULE_RX, LEVEL_ERR, "invalid buf address 0x%llx\n", transmit.data.pbuf);
 		return -EINVAL;
 	}
 
@@ -796,14 +849,14 @@ static int qavb_transmit(struct eavb_file *fl, void __user *buf)
 	stream_index = getStreamIndex(fl, transmit.hdr.streamCtx);
 	spin_unlock(&fl->streamlock);
 	if (stream_index >= MAX_STREAM_NUM) {
-		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "%s(%d) invalid streamCtx=0x%llx\n", __func__, __LINE__, transmit.hdr.streamCtx);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "invalid streamCtx=0x%llx\n", transmit.hdr.streamCtx);
 		return -EINVAL;
 	}
 
 	tsize = rsize = sizeof(struct vio_transmit_msg);
 	msg = virt_alloc_msg(priv, tsize, rsize);
 	if (!msg) {
-		LOG_EAVB(MODULE_TX, LEVEL_ERR, "%s(%d) alloc msg fail!\n", __func__, __LINE__);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "stream%d alloc msg fail!\n", stream_index);
 		return -ENOMEM;
 	}
 
@@ -818,7 +871,8 @@ static int qavb_transmit(struct eavb_file *fl, void __user *buf)
 	memcpy(&vmsg->data, &transmit.data, sizeof(struct eavb_buf_data));
 
 	vmsg->data.gpa = get_mapping_phyaddr(fl, transmit.data.pbuf, mapping_index);
-	LOG_EAVB(MODULE_TX, LEVEL_DEBUG, "%s(%d) pass phy address 0x%llx\n", __func__, __LINE__, vmsg->data.gpa);
+	LOG_EAVB(MODULE_TX, LEVEL_DEBUG, "pass phy address 0x%llx\n", vmsg->data.gpa);
+	LOG_EAVB(MODULE_TX, LEVEL_DEBUG, "stream%d (ctx 0x%llx, idx %d)\n", stream_index, vhdr->streamctx_hdl, vhdr->stream_idx);
 
 	ret = send_msg(priv, msg);
 
@@ -842,7 +896,7 @@ static long virtio_eavb_ioctl(struct file *file, unsigned int ioctl_cmd,
 	struct virtio_eavb_priv *priv = fl->priv;
 	int ret = 0;
 
-	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "%s: (%d)ioctl_cmd = 0x%x\n", priv->name, fl->index, ioctl_cmd);
+	//LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "fl->index=%d, ioctl_cmd = 0x%x\n", fl->index, ioctl_cmd);
 
 	switch (ioctl_cmd) {
 		// pass the qavb config from FE to BE
@@ -915,6 +969,7 @@ static int virtio_eavb_mmap(struct file* file, struct vm_area_struct *vma)
 	}
 	spin_unlock(&fl->mappinglock);
 	if (ret) {
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "Too many mapping (%d):fl->index %d\n", fl->mapping_count, fl->index);
 		return ret;
 	}
 
@@ -952,23 +1007,42 @@ static void fe_recv_done(struct virtqueue *rvq)
 	struct vio_msg_hdr *rsp;
 	struct fe_msg *msg;
 	unsigned int len;
+	unsigned long flags;
 
 
-	LOG_EAVB(MODULE_RX, LEVEL_DEBUG, "%s \n", __func__);
+	//LOG_EAVB(MODULE_RX, LEVEL_DEBUG, "\n");
 
-	while(1)
-	{
+	while(1) {
+		spin_lock_irqsave(&priv->rvqlock, flags);
 		rsp = virtqueue_get_buf(rvq, &len);
-		if (!rsp) break;
-		if (len != rsp->len) break;
+		spin_unlock_irqrestore(&priv->rvqlock, flags);
 
-		spin_lock(&priv->msglock);
+		if (!rsp) break;
+
+		ASSERT(len == RX_BUF_MAX_LEN);
+		if (len < rsp->len) {
+			LOG_EAVB(MODULE_RX, LEVEL_ERR, "rsp msgid %d len %d mismatch received len %d!\n", rsp->msgid, rsp->len, len);
+			continue;
+		}
+
+		if (rsp->msgid > FE_MSG_MAX - 1) {
+			LOG_EAVB(MODULE_RX, LEVEL_ERR, "rsp msgid %d is invalid!\n", rsp->msgid);
+			continue;
+		}
+
 		msg = priv->msgtable[rsp->msgid];
-		spin_unlock(&priv->msglock);
-		if (!msg) break;
-		if (msg->msgid != rsp->msgid) break;
+		if (!msg) {
+			LOG_EAVB(MODULE_RX, LEVEL_ERR, "rsp msgid %d found no msg!\n", rsp->msgid);
+			continue;
+		}
+		if (msg->msgid != rsp->msgid) {
+			LOG_EAVB(MODULE_RX, LEVEL_ERR, "rsp msgid %d mismatch msg msgid %d!\n", rsp->msgid, msg->msgid);
+			continue;
+		}
 
 		msg->rxbuf = (void *)rsp;
+		msg->rxbuf_used = 1;
+		LOG_EAVB(MODULE_RX, LEVEL_DEBUG, "msgid %d rxbuf used\n", msg->msgid);
 		complete(&msg->work);
 	}
 }
@@ -998,8 +1072,9 @@ static int virtio_eavb_probe(struct virtio_device *vdev)
 	int ret;
 	struct device *dev = NULL;
 	struct virtio_eavb_priv *priv;
+	int i;
 
-	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "%s(%d)\n", __func__, __LINE__);
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "\n");
 	priv = kmalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv) {
 		ret = -ENOMEM;
@@ -1012,6 +1087,7 @@ static int virtio_eavb_probe(struct virtio_device *vdev)
 
 	mutex_init(&priv->lock);
 	spin_lock_init(&priv->msglock);
+	spin_lock_init(&priv->rvqlock);
 
 	vdev->priv = priv;
 	priv->vdev = vdev;
@@ -1044,13 +1120,33 @@ static int virtio_eavb_probe(struct virtio_device *vdev)
 	if (IS_ERR_OR_NULL(dev))
 		goto device_create_fail;
 
+	priv->rxbufs[0] = kmalloc(FE_MSG_MAX * RX_BUF_MAX_LEN, GFP_KERNEL);
+	if (!priv->rxbufs[0]) {
+		ret = -ENOMEM;
+		goto alloc_rxbufs_fail;
+	}
+
+	for (i = 0; i<FE_MSG_MAX; i++) {
+		struct scatterlist sg;
+		u8 *rsp;
+
+		rsp = priv->rxbufs[0] + i * RX_BUF_MAX_LEN;
+		priv->rxbufs[i] = rsp;
+
+		sg_init_one(&sg, rsp, RX_BUF_MAX_LEN);
+		ret = virtqueue_add_inbuf(priv->rvq, &sg, 1, rsp, GFP_KERNEL);
+		WARN_ON(ret);
+	}
 	virtqueue_disable_cb(priv->svq);
 
 	virtqueue_enable_cb(priv->rvq);
+	virtqueue_kick(priv->rvq);
 
 	place_marker("M - DRIVER EAVB FE Ready");
 	return 0;
 
+alloc_rxbufs_fail:
+	device_destroy(priv->class, MKDEV(MAJOR(priv->dev_no), MINOR_NUM_DEV));
 device_create_fail:
 	if (!IS_ERR_OR_NULL(dev))
 		device_destroy(priv->class, MKDEV(MAJOR(priv->dev_no),
@@ -1070,7 +1166,7 @@ static void virtio_eavb_remove(struct virtio_device *vdev)
 {
 	struct virtio_eavb_priv *priv;
 
-	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "%s(%d)\n", __func__, __LINE__);
+	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "\n");
 	priv = vdev->priv;
 
 	device_destroy(priv->class, MKDEV(MAJOR(priv->dev_no), MINOR_NUM_DEV));
@@ -1080,6 +1176,7 @@ static void virtio_eavb_remove(struct virtio_device *vdev)
 
 	vdev->config->reset(vdev);
 	vdev->config->del_vqs(vdev);
+	kfree(priv->rxbufs[0]);
 	kfree(priv);
 }
 
