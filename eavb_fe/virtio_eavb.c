@@ -71,6 +71,15 @@ do { \
 	} \
 } while (0)
 
+#define eavb_place_marker_once(log) \
+do {\
+        static int times = 0; \
+        if (times < 1) {\
+                place_marker(log); \
+                times++; \
+        } \
+} while(0)
+
 struct fe_msg;
 struct virtio_eavb_priv {
 	char *name;
@@ -810,6 +819,9 @@ static int qavb_receive(struct eavb_file *fl, void __user *buf)
 		vmsg = (struct vio_receive_msg *)vhdr;
 		receive.received = vmsg->received;
 		memcpy(&receive.data, &vmsg->data, sizeof(struct eavb_buf_data));
+		if (receive.received) {
+			eavb_place_marker_once("M - DRIVER EAVB FE First received data");
+		}
 	}
 
 	virt_free_msg(priv, msg);
