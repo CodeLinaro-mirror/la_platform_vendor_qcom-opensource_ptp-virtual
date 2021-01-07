@@ -19,9 +19,11 @@
 
 #define IF_NAMESIZE             16
 #define STATION_ADDR_SIZE       8
-#define MAX_STREAM_NUM			8
+#define MAX_STREAM_NUM          8
 #define MAX_CONFIG_FILE_PATH    512
 
+#define VERSION_MAJOR           0
+#define VERSION_MINOR           1
 
 #define VIRTIO_EAVB_T_CREATE_STREAM     0
 #define VIRTIO_EAVB_T_GET_STREAM_INFO   1
@@ -31,6 +33,10 @@
 #define VIRTIO_EAVB_T_DISCONNECT_STREAM 5
 #define VIRTIO_EAVB_T_DESTROY_STREAM    6
 #define VIRTIO_EAVB_T_CREATE_STREAM_PATH    7
+#define VIRTIO_EAVB_T_VERSION           8
+#define VIRTIO_EAVB_T_MMAP              9
+#define VIRTIO_EAVB_T_MUNMAP            10
+#define VIRTIO_EAVB_T_UPDATE_CLK        11
 
 struct vio_msg_hdr {
 	uint16_t msgid;          /* unique message id */
@@ -354,7 +360,39 @@ struct vio_destroy_stream_msg {
     struct vio_msg_hdr mhdr;
 }__attribute__((__packed__));
 
+/*
+ * EAVB_IOCTL_VERSION
+ */
+struct vio_version_msg {
+	struct vio_msg_hdr mhdr;	//IN
+	uint16_t major;			//IN
+	uint16_t minor;			//IN
+}__attribute__((__packed__));
 
+/*
+ * EAVB_IOCTL_MMAP
+ */
 
+struct vio_mmap_msg {
+	struct vio_msg_hdr mhdr;	//IN
+	uint32_t size;			//IN
+	uint64_t gpa;			//IN
+}__attribute__((__packed__));
+
+/*
+ * EAVB_IOCTL_MUNMAP
+ */
+struct vio_munmap_msg {
+	struct vio_msg_hdr mhdr;	//IN
+	uint64_t gpa;			//IN
+}__attribute__((__packed__));
+
+/*
+ * EAVB_IOCTL_UPDATE_CLK
+ */
+struct vio_update_clk_msg {
+	struct vio_msg_hdr mhdr;	//IN
+	uint64_t clk;			//IN
+}__attribute__((__packed__));
 
 #endif /* __VDEV_VIRTIO_EAVB_H__ */
