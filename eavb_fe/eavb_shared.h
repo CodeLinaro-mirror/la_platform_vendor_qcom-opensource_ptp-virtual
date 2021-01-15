@@ -31,6 +31,7 @@
 #define EAVB_IOCTL_DISCONNECT_STREAM    _IOW(EAVB_IOCTL_MAGIC, 9, struct eavb_ioctl_disconnect_stream)
 #define EAVB_IOCTL_DESTROY_STREAM  _IOW(EAVB_IOCTL_MAGIC, 10, struct eavb_ioctl_destroy_stream)
 #define EAVB_IOCTL_CREATE_STREAM_WITH_PATH    _IOWR(EAVB_IOCTL_MAGIC, 11, struct eavb_ioctl_create_stream_with_path)
+#define EAVB_IOCTL_GET_CRF_TS          _IOW(EAVB_IOCTL_MAGIC, 12, uint64_t)
 
 // default value
 #define STATION_ADDR_SIZE       8
@@ -84,6 +85,33 @@ enum {
     QAVB_IEEE_1722_ver_2016,
     QAVB_IEEE_1722_ver_INVALID = -1,
 } avb_ieee1722_version;
+
+enum {
+    QAVB_AVTP_CRF_MODE_DISABLED = 0,    // CRF disabled
+    QAVB_AVTP_CRF_MODE_TALKER,          // CRF talker
+    QAVB_AVTP_CRF_MODE_LISTENER,        // CRF listener, PPM = local - remote
+    QAVB_AVTP_CRF_MODE_LISTENER_NOMINAL,// CRF listener, PPM = nominal - remote
+    QAVB_AVTP_CRF_MODE_MAX
+} avtp_crf_mode;
+
+enum {
+    QAVB_AVTP_CRF_TYPE_USER = 0,        // user specified
+    QAVB_AVTP_CRF_TYPE_AUDIO_SAMPLE,    // audio ample timestamp
+    QAVB_AVTP_CRF_TYPE_VIDEO_FRAME,     // video frame sync timestamp
+    QAVB_AVTP_CRF_TYPE_VIDEO_LINE,      // video line timestamp
+    QAVB_AVTP_CRF_TYPE_MACHINE_CYCLE,   // machine cycle timestamp
+    QAVB_AVTP_CRF_TYPE_MAX
+} avtp_crf_type;
+
+enum {
+    QAVB_AVTP_CRF_PULL_1_DIV_1_0 = 0,       // Multiply base_frequency field by 1.0
+    QAVB_AVTP_CRF_PULL_1_DIV_1_DOT_1001,    // Multiply base_frequency field by 1/1.1001
+    QAVB_AVTP_CRF_PULL_1_DOT_1001,          // Multiply base_frequency field by 1.1001
+    QAVB_AVTP_CRF_PULL_24_DIV_25,           // Multiply base_frequency field by 24/25
+    QAVB_AVTP_CRF_PULL_25_DIV_24,           // Multiply base_frequency field by 25/24
+    QAVB_AVTP_CRF_PULL_8,                    // Multiply base_frequency field by 8
+    QAVB_AVTP_CRF_PULL_MAX
+} avtp_crf_pull;
 
 typedef struct eavb_ioctl_hdr {
     uint64_t streamCtx;
@@ -320,7 +348,7 @@ typedef struct eavb_ioctl_transmit {
     eavb_ioctl_hdr_t hdr;       //IN
     //eavb_ioctl_mem_t mem;       //IN
     eavb_ioctl_buf_data_t data; //IN/OUT
-    int32_t written;		//OUT
+    int32_t written;
 } eavb_ioctl_transmit_t;
 
 
