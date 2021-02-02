@@ -470,6 +470,7 @@ static struct fe_msg *virt_alloc_msg(struct virtio_eavb_priv *priv, int tsize, i
 
 	if (i == FE_MSG_MAX) {
 		LOG_EAVB(MODULE_TX, LEVEL_ERR, "fe message queue is full \n");
+		kfree(buf);
 		kfree(msg);
 		return NULL;
 	}
@@ -529,6 +530,7 @@ void reclaim_function(struct work_struct *work)
 
 		ASSERT(vhdr->len == len);
 		LOG_EAVB(MODULE_TX, LEVEL_DEBUG, "msgid %d txbuf used\n", vhdr->msgid);
+		kfree(vhdr);
 	}
 }
 
