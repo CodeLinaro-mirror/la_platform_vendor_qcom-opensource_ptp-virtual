@@ -32,7 +32,7 @@
 #define EAVB_DEBUGFS
 
 //TODO need add VIRTIO_ID_EAVB in uapi/linux/virtio_ids.h
-#define VIRTIO_ID_EAVB 		35
+#define VIRTIO_ID_EAVB 		36
 
 //support feature
 #define VIRTIO_EAVB_F_SHMEM	1
