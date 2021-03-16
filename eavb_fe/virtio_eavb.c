@@ -32,7 +32,7 @@
 #define EAVB_DEBUGFS
 
 //TODO need add VIRTIO_ID_EAVB in uapi/linux/virtio_ids.h
-#define VIRTIO_ID_EAVB 		35
+#define VIRTIO_ID_EAVB 		36
 
 //support feature
 #define VIRTIO_EAVB_F_SHMEM	1
@@ -195,7 +195,7 @@ static ssize_t log_write(struct file *file,
                size_t count, loff_t *ppos)
 {
 	//struct virtio_eavb_priv *priv = file->private_data;
-	char mybuffer[32];
+	char mybuffer[32] = {0};
 	size_t len = min(count, sizeof(mybuffer));
 	int input;
 
@@ -220,6 +220,7 @@ int do_rxrecords_snapshoot(struct virtio_eavb_priv *priv, char *buffer, size_t s
 	index = priv->next_rxrecords_index - 1;
 	//TODO
 
+	len = 0;
 	for(i=0; i<32; i++) {
 		u32 msgid = records[(index - i)& 0x1f].msgid;
 		u64 ts = records[(index - i)& 0x1f].ts;
@@ -470,6 +471,7 @@ static struct fe_msg *virt_alloc_msg(struct virtio_eavb_priv *priv, int tsize, i
 
 	if (i == FE_MSG_MAX) {
 		LOG_EAVB(MODULE_TX, LEVEL_ERR, "fe message queue is full \n");
+		kfree(buf);
 		kfree(msg);
 		return NULL;
 	}
@@ -529,6 +531,7 @@ void reclaim_function(struct work_struct *work)
 
 		ASSERT(vhdr->len == len);
 		LOG_EAVB(MODULE_TX, LEVEL_DEBUG, "msgid %d txbuf used\n", vhdr->msgid);
+		kfree(vhdr);
 	}
 }
 
@@ -567,7 +570,7 @@ static int send_msg(struct virtio_eavb_priv *priv, struct fe_msg *msg)
 
 	rsv = wait_for_completion_timeout(&msg->work, msecs_to_jiffies(1000));
 	if (rsv == 0) {
-		LOG_EAVB(MODULE_TX, LEVEL_ERR, "msgid %d timeout, msg = %p\n", msg->msgid, msg);
+		LOG_EAVB(MODULE_TX, LEVEL_ERR, "msgid %d timeout\n", msg->msgid);
 		return -ETIMEDOUT;
 	}
 
@@ -1323,6 +1326,13 @@ static int virtio_eavb_mmap(struct file* file, struct vm_area_struct *vma)
 	vsize = vma->vm_end - vma->vm_start;
 	LOG_EAVB(MODULE_SETUP, LEVEL_DEBUG, "vsize = %ld(0x%lx~0x%lx)\n", vsize, vma->vm_start, vma->vm_end);
 	buf = kmalloc(vsize, GFP_KERNEL);
+	if (!buf) {
+		spin_lock(&fl->mappinglock);
+		fl->mapping_count --;
+		spin_unlock(&fl->mappinglock);
+		LOG_EAVB(MODULE_SETUP, LEVEL_ERR, "kmalloc failed\n");
+		return -ENOMEM;
+	}
 	vma->vm_flags |= VM_IO;
 	vma->vm_flags |= VM_LOCKED;
 
@@ -1397,7 +1407,7 @@ static void fe_recv_done(struct virtqueue *rvq)
 
 		msg->rxbuf = (void *)rsp;
 		msg->rxbuf_used = 1;
-		LOG_EAVB(MODULE_RX, LEVEL_DEBUG, "msgid %d rxbuf used, msg=%p\n", msg->msgid, msg);
+		LOG_EAVB(MODULE_RX, LEVEL_DEBUG, "msgid %d rxbuf used\n", msg->msgid);
 #ifdef EAVB_DEBUGFS
 		priv->rxrecords[priv->next_rxrecords_index & 0x1f].msgid = msg->msgid;
 		priv->rxrecords[priv->next_rxrecords_index & 0x1f].ts = local_clock();
