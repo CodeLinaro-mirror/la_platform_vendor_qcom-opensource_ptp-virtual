@@ -316,11 +316,19 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct 
 	uint32_t local_qtimer_offset_lo=0, local_qtimer_offset_hi=0;
 	long long local_bypqtimer_offset = 0;
 	unsigned long long cur_qtimer_ns = 0, cur_qtimer_s = 0;
-
+	uint64_t *cur_gptp_mem;
+	uint64_t *monolithic_mem;
+	ktime_t after,before;
+	uint64_t after64,before64,monodiff;
+	int count = 0;
+	do {
+	before = ktime_get();
 	local_qtimer_offset_lo = ioread32((void *)(((volatile uint32_t *)(gptp_virtbase + 0x1000 -2 * 8))));
 	local_qtimer_offset_hi = ioread32((void *)(((volatile uint32_t *)(gptp_virtbase + 0x1000 -2 * 8 + 4))));
 	gvm_tick_lo = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase))));
 	gvm_tick_hi = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase + 4))));
+	cur_gptp_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 3*sizeof(uint64_t));
+	monolithic_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 4*sizeof(uint64_t));
 
 	local_bypqtimer_offset = (long long)((unsigned long long)local_qtimer_offset_lo | ((unsigned long long)local_qtimer_offset_hi << 32));
 	gvm_tick = (unsigned long long)((unsigned long long)gvm_tick_lo | ((unsigned long long)gvm_tick_hi << 32));
@@ -330,9 +338,26 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct 
 	cur_qtimer_ns /= 19200000ULL;
 	cur_qtimer_ns += (cur_qtimer_s * 1000000000);
 	cur_gptp = (unsigned long long)(cur_qtimer_ns - local_bypqtimer_offset);
+	after = ktime_get();
+	before64 = ktime_to_ns(before);
+	after64 = ktime_to_ns(after);
+	monodiff = after64 - before64;
+	count++;
+	} while(monodiff>20000&&count<3);
 
-	ts->tv_sec = div_u64_rem(cur_gptp, 1000000000ULL, &reminder);
-	ts->tv_nsec = reminder;
+	if(count>=3 && monodiff>20000)
+	{
+		ts->tv_sec = 0;
+		ts->tv_nsec = 0;
+	}
+	else
+	{
+		ts->tv_sec = div_u64_rem(cur_gptp, 1000000000ULL, &reminder);
+		ts->tv_nsec = reminder;
+	}
+
+	iowrite64(before64+(monodiff/2), monolithic_mem);
+	iowrite64(cur_gptp, cur_gptp_mem);
 
 	return 0;
 #endif
