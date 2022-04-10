@@ -286,12 +286,51 @@ static void __iomem *qtimer_virtbase;
 static void __iomem *gptp_virtbase;
 //#endif
 
+static resource_size_t ntnbase = 0;
+static resource_size_t qtmraddr = 0;
+static resource_size_t ntnbase_size = 0;
+static resource_size_t qtmraddr_size = 0;
+
 #define NTN_BASE_ADDRESS 0xd60a000
 
 /*Support more GMAC such as HANA EMAC*/
 #ifdef DWC_QOS_ETH_HANA
 #undef NTN_BASE_ADDRESS
 #define NTN_BASE_ADDRESS 0x20000
+
+static int ptp_virtual_setup_passthrough(struct platform_device *pdev)
+{
+	int32_t ret = 0;
+	struct resource *res;
+
+	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ptp_reg");
+	if (res) {
+		ntnbase = res->start;
+		ntnbase_size = resource_size(res);
+		PTP_VIRTUAL_ALERT("%s: read ntnbase: 0x%0x size: 0x%x\n",
+				__func__, ntnbase, ntnbase_size);
+	} else {
+		PTP_VIRTUAL_ALERT("%s: get ptp_virtual ntnbase resource failed\n", __func__);
+		return -ENODEV;
+	}
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "qtimer_reg");
+	if (res) {
+		qtmraddr = res->start;
+		qtmraddr_size = resource_size(res);
+		PTP_VIRTUAL_ALERT("%s: read qtmraddr: 0x%0x size: 0x%x\n",
+				__func__, qtmraddr, qtmraddr_size);
+	} else {
+		PTP_VIRTUAL_ALERT("%s: get ptp_virtual qtimer_reg resource failed\n", __func__);
+		return -ENODEV;
+	}
+
+	PTP_VIRTUAL_DEBUG_L1("Exit: %s\n", __func__);
+	return ret;
+}
+
 #endif
 
 #define MAC_STSR_RgOffAddr ((volatile uint32_t *)(virtbase + 0xb08))
@@ -338,6 +377,7 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct 
 	cur_qtimer_ns /= 19200000ULL;
 	cur_qtimer_ns += (cur_qtimer_s * 1000000000);
 	cur_gptp = (unsigned long long)(cur_qtimer_ns - local_bypqtimer_offset);
+
 	after = ktime_get();
 	before64 = ktime_to_ns(before);
 	after64 = ktime_to_ns(after);
@@ -490,6 +530,11 @@ static int ptp_virtual_probe(struct platform_device *pdev)
 #ifdef PTP_READ_WTIH_VDEV
 	ret = ptp_virtual_setup_vdev(pdev->dev.of_node);
 #endif
+
+#ifdef PTP_READ_WTIH_PASS_THRU
+	ret = ptp_virtual_setup_passthrough(pdev);
+#endif
+
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s\n", __func__);
 	return ret;
 }
@@ -624,11 +669,20 @@ static int __init ptp_virtual_init(void)
 */
 #endif
 #ifdef PTP_READ_WTIH_PASS_THRU
+
+	if(!ntnbase)
 	virtbase = ioremap(NTN_BASE_ADDRESS, 0x1000);
-	PTP_VIRTUAL_ALERT("%s: virtbase: %0x\n", __func__, virtbase);
+	else
+	virtbase = ioremap(ntnbase, 0x1000);
+
+	PTP_VIRTUAL_ALERT("%s: virtbase: %0x %0x\n", __func__, virtbase,ntnbase);
 #ifdef QTIMER_PASS_THRU
+	if(!qtmraddr)
 	qtimer_virtbase = ioremap(QTMR0_F0V2_QTMR_V2_ADDR, QTMR0_F0V2_QTMR_V2_SIZE);
-	PTP_VIRTUAL_ALERT("%s: qtimer_virtbase: %0x\n", __func__, qtimer_virtbase);
+	else
+	qtimer_virtbase = ioremap(qtmraddr, QTMR0_F0V2_QTMR_V2_SIZE);
+
+	PTP_VIRTUAL_ALERT("%s: qtimer_virtbase: %0x %0x\n", __func__, qtimer_virtbase,qtmraddr);
 	if (carveout_memory_address) {
 		gptp_virtbase = ioremap(carveout_memory_address, 0x1000);
 		PTP_VIRTUAL_ALERT("%s: gptp_virtbase: %0x\n", __func__, gptp_virtbase);
