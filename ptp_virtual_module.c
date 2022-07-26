@@ -352,46 +352,65 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct 
 	unsigned long long gvm_tick, host_tick, local_gptp, cur_gptp;
 	uint32_t gvm_tick_lo,gvm_tick_hi, host_tick_lo, host_tick_hi, local_gptp_lo, local_gptp_hi;
 	uint32_t reminder;
-	uint32_t local_qtimer_offset_lo=0, local_qtimer_offset_hi=0;
-	long long local_bypqtimer_offset = 0;
+	uint32_t qtimer_sync_lo=0, qtimer_sync_hi=0;
+	uint32_t gptp_sync_lo=0, gptp_sync_hi=0;
+	uint32_t qtimer_inc_ratio_lo=0, qtimer_inc_ratio_hi=0;
+	long long qtimer_inc_ratio = 0;
+	long long qtimer_sync_val = 0;
+	long long gptp_sync_val = 0;
 	unsigned long long cur_qtimer_ns = 0, cur_qtimer_s = 0;
 	uint64_t *cur_gptp_mem;
 	uint64_t *monolithic_mem;
 	ktime_t after,before;
 	uint64_t after64,before64,monodiff;
 	int count = 0;
+	gptp_sync_lo = ioread32((void *)(((volatile uint32_t *)(
+	                                      gptp_virtbase + 0x1000 - 5 * sizeof(uint64_t)))));
+	gptp_sync_hi = ioread32((void *)(((volatile uint32_t *)(
+	                                      gptp_virtbase + 0x1000 - 5 * sizeof(uint64_t) + 4))));
+	qtimer_sync_lo = ioread32((void *)(((volatile uint32_t *)(
+	                                        gptp_virtbase + 0x1000 - 6 * sizeof(uint64_t)))));
+	qtimer_sync_hi = ioread32((void *)(((volatile uint32_t *)(
+	                                        gptp_virtbase + 0x1000 - 6 * sizeof(uint64_t) + 4))));
+	qtimer_inc_ratio_lo = ioread32((void *)(((volatile float *)(
+	        gptp_virtbase + 0x1000 - 7 * sizeof(uint64_t)))));
+	qtimer_inc_ratio_hi = ioread32((void *)(((volatile float *)(
+	        gptp_virtbase + 0x1000 - 7 * sizeof(uint64_t) + 4))));
+	cur_gptp_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 3 * sizeof(uint64_t));
+	monolithic_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 4 * sizeof(uint64_t));
+
 	do {
-	before = ktime_get();
-	local_qtimer_offset_lo = ioread32((void *)(((volatile uint32_t *)(gptp_virtbase + 0x1000 -2 * 8))));
-	local_qtimer_offset_hi = ioread32((void *)(((volatile uint32_t *)(gptp_virtbase + 0x1000 -2 * 8 + 4))));
-	gvm_tick_lo = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase))));
-	gvm_tick_hi = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase + 4))));
-	cur_gptp_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 3*sizeof(uint64_t));
-	monolithic_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 4*sizeof(uint64_t));
+		local_irq_disable();
+		before = ktime_get();
+		gvm_tick_lo = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase))));
+		gvm_tick_hi = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase + 4))));
+		after = ktime_get();
+		local_irq_enable();
+		before64 = ktime_to_ns(before);
+		after64 = ktime_to_ns(after);
+		monodiff = after64 - before64;
+		count++;
+	} while (monodiff > 20000 && count < 3);
 
-	local_bypqtimer_offset = (long long)((unsigned long long)local_qtimer_offset_lo | ((unsigned long long)local_qtimer_offset_hi << 32));
-	gvm_tick = (unsigned long long)((unsigned long long)gvm_tick_lo | ((unsigned long long)gvm_tick_hi << 32));
-	cur_qtimer_s = (gvm_tick / 19200000ULL);
-	cur_qtimer_ns = (gvm_tick % 19200000ULL);
-	cur_qtimer_ns *= 1000000000ULL;
-	cur_qtimer_ns /= 19200000ULL;
-	cur_qtimer_ns += (cur_qtimer_s * 1000000000);
-	cur_gptp = (unsigned long long)(cur_qtimer_ns - local_bypqtimer_offset);
-
-	after = ktime_get();
-	before64 = ktime_to_ns(before);
-	after64 = ktime_to_ns(after);
-	monodiff = after64 - before64;
-	count++;
-	} while(monodiff>20000&&count<3);
-
-	if(count>=3 && monodiff>20000)
-	{
+	if (count >= 3 && monodiff > 20000) {
 		ts->tv_sec = 0;
 		ts->tv_nsec = 0;
-	}
-	else
-	{
+	} else {
+		gptp_sync_val = (long long)((unsigned long long)gptp_sync_lo | ((
+		                                unsigned long long)gptp_sync_hi << 32));
+		qtimer_sync_val = (long long)((unsigned long long)qtimer_sync_lo | ((
+		                                  unsigned long long)qtimer_sync_hi << 32));
+		qtimer_inc_ratio = (long long)((unsigned long long)qtimer_inc_ratio_lo | ((
+		                                   unsigned long long)qtimer_inc_ratio_hi << 32));
+		gvm_tick = (unsigned long long)((unsigned long long)gvm_tick_lo | ((
+		                                    unsigned long long)gvm_tick_hi << 32));
+		cur_qtimer_s = (gvm_tick / 19200000ULL);
+		cur_qtimer_ns = (gvm_tick % 19200000ULL);
+		cur_qtimer_ns *= 1000000000ULL;
+		cur_qtimer_ns /= 19200000ULL;
+		cur_qtimer_ns += (cur_qtimer_s * 1000000000);
+		cur_gptp = (unsigned long long)(gptp_sync_val + ((cur_qtimer_ns -
+		                                qtimer_sync_val) * qtimer_inc_ratio) / 1000000000);
 		ts->tv_sec = div_u64_rem(cur_gptp, 1000000000ULL, &reminder);
 		ts->tv_nsec = reminder;
 	}
