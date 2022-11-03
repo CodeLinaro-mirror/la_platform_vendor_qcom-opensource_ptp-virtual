@@ -286,12 +286,51 @@ static void __iomem *qtimer_virtbase;
 static void __iomem *gptp_virtbase;
 //#endif
 
+static resource_size_t ntnbase = 0;
+static resource_size_t qtmraddr = 0;
+static resource_size_t ntnbase_size = 0;
+static resource_size_t qtmraddr_size = 0;
+
 #define NTN_BASE_ADDRESS 0xd60a000
 
 /*Support more GMAC such as HANA EMAC*/
 #ifdef DWC_QOS_ETH_HANA
 #undef NTN_BASE_ADDRESS
 #define NTN_BASE_ADDRESS 0x20000
+
+static int ptp_virtual_setup_passthrough(struct platform_device *pdev)
+{
+	int32_t ret = 0;
+	struct resource *res;
+
+	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ptp_reg");
+	if (res) {
+		ntnbase = res->start;
+		ntnbase_size = resource_size(res);
+		PTP_VIRTUAL_ALERT("%s: read ntnbase: 0x%0x size: 0x%x\n",
+				__func__, ntnbase, ntnbase_size);
+	} else {
+		PTP_VIRTUAL_ALERT("%s: get ptp_virtual ntnbase resource failed\n", __func__);
+		return -ENODEV;
+	}
+
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "qtimer_reg");
+	if (res) {
+		qtmraddr = res->start;
+		qtmraddr_size = resource_size(res);
+		PTP_VIRTUAL_ALERT("%s: read qtmraddr: 0x%0x size: 0x%x\n",
+				__func__, qtmraddr, qtmraddr_size);
+	} else {
+		PTP_VIRTUAL_ALERT("%s: get ptp_virtual qtimer_reg resource failed\n", __func__);
+		return -ENODEV;
+	}
+
+	PTP_VIRTUAL_DEBUG_L1("Exit: %s\n", __func__);
+	return ret;
+}
+
 #endif
 
 #define MAC_STSR_RgOffAddr ((volatile uint32_t *)(virtbase + 0xb08))
@@ -313,45 +352,65 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct 
 	unsigned long long gvm_tick, host_tick, local_gptp, cur_gptp;
 	uint32_t gvm_tick_lo,gvm_tick_hi, host_tick_lo, host_tick_hi, local_gptp_lo, local_gptp_hi;
 	uint32_t reminder;
-	uint32_t local_qtimer_offset_lo=0, local_qtimer_offset_hi=0;
-	long long local_bypqtimer_offset = 0;
+	uint32_t qtimer_sync_lo=0, qtimer_sync_hi=0;
+	uint32_t gptp_sync_lo=0, gptp_sync_hi=0;
+	uint32_t qtimer_inc_ratio_lo=0, qtimer_inc_ratio_hi=0;
+	long long qtimer_inc_ratio = 0;
+	long long qtimer_sync_val = 0;
+	long long gptp_sync_val = 0;
 	unsigned long long cur_qtimer_ns = 0, cur_qtimer_s = 0;
 	uint64_t *cur_gptp_mem;
 	uint64_t *monolithic_mem;
 	ktime_t after,before;
 	uint64_t after64,before64,monodiff;
 	int count = 0;
+	gptp_sync_lo = ioread32((void *)(((volatile uint32_t *)(
+	                                      gptp_virtbase + 0x1000 - 5 * sizeof(uint64_t)))));
+	gptp_sync_hi = ioread32((void *)(((volatile uint32_t *)(
+	                                      gptp_virtbase + 0x1000 - 5 * sizeof(uint64_t) + 4))));
+	qtimer_sync_lo = ioread32((void *)(((volatile uint32_t *)(
+	                                        gptp_virtbase + 0x1000 - 6 * sizeof(uint64_t)))));
+	qtimer_sync_hi = ioread32((void *)(((volatile uint32_t *)(
+	                                        gptp_virtbase + 0x1000 - 6 * sizeof(uint64_t) + 4))));
+	qtimer_inc_ratio_lo = ioread32((void *)(((volatile float *)(
+	        gptp_virtbase + 0x1000 - 7 * sizeof(uint64_t)))));
+	qtimer_inc_ratio_hi = ioread32((void *)(((volatile float *)(
+	        gptp_virtbase + 0x1000 - 7 * sizeof(uint64_t) + 4))));
+	cur_gptp_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 3 * sizeof(uint64_t));
+	monolithic_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 4 * sizeof(uint64_t));
+
 	do {
-	before = ktime_get();
-	local_qtimer_offset_lo = ioread32((void *)(((volatile uint32_t *)(gptp_virtbase + 0x1000 -2 * 8))));
-	local_qtimer_offset_hi = ioread32((void *)(((volatile uint32_t *)(gptp_virtbase + 0x1000 -2 * 8 + 4))));
-	gvm_tick_lo = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase))));
-	gvm_tick_hi = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase + 4))));
-	cur_gptp_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 3*sizeof(uint64_t));
-	monolithic_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 4*sizeof(uint64_t));
+		local_irq_disable();
+		before = ktime_get();
+		gvm_tick_lo = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase))));
+		gvm_tick_hi = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase + 4))));
+		after = ktime_get();
+		local_irq_enable();
+		before64 = ktime_to_ns(before);
+		after64 = ktime_to_ns(after);
+		monodiff = after64 - before64;
+		count++;
+	} while (monodiff > 20000 && count < 3);
 
-	local_bypqtimer_offset = (long long)((unsigned long long)local_qtimer_offset_lo | ((unsigned long long)local_qtimer_offset_hi << 32));
-	gvm_tick = (unsigned long long)((unsigned long long)gvm_tick_lo | ((unsigned long long)gvm_tick_hi << 32));
-	cur_qtimer_s = (gvm_tick / 19200000ULL);
-	cur_qtimer_ns = (gvm_tick % 19200000ULL);
-	cur_qtimer_ns *= 1000000000ULL;
-	cur_qtimer_ns /= 19200000ULL;
-	cur_qtimer_ns += (cur_qtimer_s * 1000000000);
-	cur_gptp = (unsigned long long)(cur_qtimer_ns - local_bypqtimer_offset);
-	after = ktime_get();
-	before64 = ktime_to_ns(before);
-	after64 = ktime_to_ns(after);
-	monodiff = after64 - before64;
-	count++;
-	} while(monodiff>20000&&count<3);
-
-	if(count>=3 && monodiff>20000)
-	{
+	if (count >= 3 && monodiff > 20000) {
 		ts->tv_sec = 0;
 		ts->tv_nsec = 0;
-	}
-	else
-	{
+	} else {
+		gptp_sync_val = (long long)((unsigned long long)gptp_sync_lo | ((
+		                                unsigned long long)gptp_sync_hi << 32));
+		qtimer_sync_val = (long long)((unsigned long long)qtimer_sync_lo | ((
+		                                  unsigned long long)qtimer_sync_hi << 32));
+		qtimer_inc_ratio = (long long)((unsigned long long)qtimer_inc_ratio_lo | ((
+		                                   unsigned long long)qtimer_inc_ratio_hi << 32));
+		gvm_tick = (unsigned long long)((unsigned long long)gvm_tick_lo | ((
+		                                    unsigned long long)gvm_tick_hi << 32));
+		cur_qtimer_s = (gvm_tick / 19200000ULL);
+		cur_qtimer_ns = (gvm_tick % 19200000ULL);
+		cur_qtimer_ns *= 1000000000ULL;
+		cur_qtimer_ns /= 19200000ULL;
+		cur_qtimer_ns += (cur_qtimer_s * 1000000000);
+		cur_gptp = (unsigned long long)(gptp_sync_val + ((cur_qtimer_ns -
+		                                qtimer_sync_val) * qtimer_inc_ratio) / 1000000000);
 		ts->tv_sec = div_u64_rem(cur_gptp, 1000000000ULL, &reminder);
 		ts->tv_nsec = reminder;
 	}
@@ -490,6 +549,11 @@ static int ptp_virtual_probe(struct platform_device *pdev)
 #ifdef PTP_READ_WTIH_VDEV
 	ret = ptp_virtual_setup_vdev(pdev->dev.of_node);
 #endif
+
+#ifdef PTP_READ_WTIH_PASS_THRU
+	ret = ptp_virtual_setup_passthrough(pdev);
+#endif
+
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s\n", __func__);
 	return ret;
 }
@@ -624,11 +688,20 @@ static int __init ptp_virtual_init(void)
 */
 #endif
 #ifdef PTP_READ_WTIH_PASS_THRU
+
+	if(!ntnbase)
 	virtbase = ioremap(NTN_BASE_ADDRESS, 0x1000);
-	PTP_VIRTUAL_ALERT("%s: virtbase: %0x\n", __func__, virtbase);
+	else
+	virtbase = ioremap(ntnbase, 0x1000);
+
+	PTP_VIRTUAL_ALERT("%s: virtbase: %0x %0x\n", __func__, virtbase,ntnbase);
 #ifdef QTIMER_PASS_THRU
+	if(!qtmraddr)
 	qtimer_virtbase = ioremap(QTMR0_F0V2_QTMR_V2_ADDR, QTMR0_F0V2_QTMR_V2_SIZE);
-	PTP_VIRTUAL_ALERT("%s: qtimer_virtbase: %0x\n", __func__, qtimer_virtbase);
+	else
+	qtimer_virtbase = ioremap(qtmraddr, QTMR0_F0V2_QTMR_V2_SIZE);
+
+	PTP_VIRTUAL_ALERT("%s: qtimer_virtbase: %0x %0x\n", __func__, qtimer_virtbase,qtmraddr);
 	if (carveout_memory_address) {
 		gptp_virtbase = ioremap(carveout_memory_address, 0x1000);
 		PTP_VIRTUAL_ALERT("%s: gptp_virtbase: %0x\n", __func__, gptp_virtbase);
