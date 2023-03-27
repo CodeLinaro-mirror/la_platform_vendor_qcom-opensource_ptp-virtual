@@ -386,7 +386,7 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
 		local_irq_disable();
 		before = ktime_get();
 		cur_qtimer_ns = ioread64((void *)(((volatile uint64_t * )(
-		                                       qtimer_virtbase)))) * div64_u64(1000000000, 19200000);
+		                                       qtimer_virtbase)))) ; //qtimer ticks
 		after = ktime_get();
 		local_irq_enable();
 		before64 = ktime_to_ns(before);
@@ -394,6 +394,12 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
 		monodiff = after64 - before64;
 		count++;
 	} while (monodiff > 20000 && count < 3);
+
+	//multiple by the tick factor.	(1000000000/19200000)
+	cur_qtimer_ns = cur_qtimer_ns*100;
+	cur_qtimer_ns = div64_u64(cur_qtimer_ns,192);
+	cur_qtimer_ns = cur_qtimer_ns*100;
+
 
 	if (count >= 3 && monodiff > 20000) {
 		ts->tv_sec = 0;
@@ -413,8 +419,8 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
 
 	iowrite64(before64 + div64_u64(monodiff, 2), monolithic_mem);
 	iowrite64(cur_gptp, cur_gptp_mem);
-	PTP_VIRTUAL_DEBUG_L1("%s: cur_gptp_ns: %lld cur_qtimer_ns %lld monotonic_time_ns %lld",
-	                     __func__, cur_gptp, cur_qtimer_ns, before64 + div64_u64(monodiff, 2));
+	PTP_VIRTUAL_DEBUG_L1("%s: cur_gptp_ns: %lld cur_qtimer_ns %lld monotonic_time_ns %lld gptp_sync_val %lld qtimer_sync_val %lld",
+	                     __func__, cur_gptp, cur_qtimer_ns, before64 + div64_u64(monodiff, 2),gptp_sync_val,qtimer_sync_val);
 	return 0;
 #endif
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
