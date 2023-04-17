@@ -46,6 +46,7 @@
 #include <net/request_sock.h>
 #include <linux/io.h>
 #include <linux/time.h>
+#include <linux/math64.h>
 
 #define QTIMER_PASS_THRU
 #define GPTP_GVM_SHM_MODE
@@ -88,12 +89,11 @@ static int ptp_virtual_setup_socket(void)
 	struct sockaddr_in sin;
 	int port = 8080;
 	cscok = NULL;
-
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
-	cscok=(struct socket*)kmalloc(sizeof(struct socket),GFP_KERNEL);
-	error = sock_create(PF_INET,SOCK_STREAM,IPPROTO_TCP,&cscok);
+	cscok = (struct socket*)kmalloc(sizeof(struct socket), GFP_KERNEL);
+	error = sock_create(PF_INET, SOCK_STREAM, IPPROTO_TCP, &cscok);
 
-	if(error<0) {
+	if (error < 0) {
 		PTP_VIRTUAL_ALERT("%s: CREATE CSOCKET ERROR\n", __func__);
 		goto err;
 	}
@@ -101,12 +101,12 @@ static int ptp_virtual_setup_socket(void)
 	sin.sin_family = AF_INET;
 	sin.sin_addr.s_addr = in_aton("192.168.0.1");
 	sin.sin_port = htons(port);
-
 	error = cscok->ops->connect(cscok, (struct sockaddr*) &sin, sizeof(sin), 0);
 
-	if(error<0) {
+	if (error < 0) {
 		PTP_VIRTUAL_ALERT("%s: CONNECT CSOCKET ERROR\n", __func__);
 	}
+
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s.\n", __func__);
 	return ret;
 err:
@@ -119,22 +119,25 @@ err:
 static void ptp_virtual_disconnect_socket(void)
 {
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
-	if(cscok) {
+
+	if (cscok) {
 		cscok->ops->shutdown(cscok, SHUT_RDWR);
 		kfree(cscok);
 		cscok = NULL;
 	}
+
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s.\n", __func__);
 }
 
-static int PTP_VM_get_time_with_socket(struct ptp_clock_info *ptp, struct timespec64 *ts)
+static int PTP_VM_get_time_with_socket(struct ptp_clock_info *ptp,
+                                       struct timespec64 *ts)
 {
 	int error, request;
 	uint32_t hw_ts[2];
 	struct msghdr msg;
 	struct iovec iov;
 	mm_segment_t oldfs;
-	int size=0;
+	int size = 0;
 #ifdef MEASURE_ROUNDTRIP_TIME
 	struct timespec64 before;
 	struct timespec64 after;
@@ -146,62 +149,61 @@ static int PTP_VM_get_time_with_socket(struct ptp_clock_info *ptp, struct timesp
 	hw_ts[1] = 0;
 	ts->tv_sec = 0;
 	ts->tv_nsec = 0;
-	if(cscok == NULL) {
+
+	if (cscok == NULL) {
 		PTP_VIRTUAL_ALERT("%s: No connection with the host\n", __func__);
 		return -1;
 	}
 
 	request = GET_PTP_TS;
-	iov.iov_base=&request;
-	iov.iov_len=sizeof(request);
-
-	msg.msg_control=NULL;
-	msg.msg_controllen=0;
-	msg.msg_flags=0;
-	msg.msg_iov=&iov;
-	msg.msg_iovlen=1;
-	msg.msg_name=0;
-	msg.msg_namelen=0;
-
-	oldfs=get_fs();
+	iov.iov_base = &request;
+	iov.iov_len = sizeof(request);
+	msg.msg_control = NULL;
+	msg.msg_controllen = 0;
+	msg.msg_flags = 0;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_name = 0;
+	msg.msg_namelen = 0;
+	oldfs = get_fs();
 	set_fs(KERNEL_DS);
 #ifdef MEASURE_ROUNDTRIP_TIME
 	getnstimeofday(&before);
 #endif
-	size=sock_sendmsg(cscok,&msg,sizeof(request));
+	size = sock_sendmsg(cscok, &msg, sizeof(request));
 
-	if(error<0) {
+	if (error < 0) {
 		PTP_VIRTUAL_ALERT("%s: SEND MSG ERROR\n", __func__);
 		goto err;
 	}
 
 	set_fs(oldfs);
-	iov.iov_base=hw_ts;
-	iov.iov_len=sizeof(hw_ts);
-
-	msg.msg_control=NULL;
-	msg.msg_controllen=0;
-	msg.msg_flags=0;
-	msg.msg_name=0;
-	msg.msg_namelen=0;
-	msg.msg_iov=&iov;
-	msg.msg_iovlen=1;
-
-	oldfs=get_fs();
+	iov.iov_base = hw_ts;
+	iov.iov_len = sizeof(hw_ts);
+	msg.msg_control = NULL;
+	msg.msg_controllen = 0;
+	msg.msg_flags = 0;
+	msg.msg_name = 0;
+	msg.msg_namelen = 0;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	oldfs = get_fs();
 	set_fs(KERNEL_DS);
-	size=sock_recvmsg(cscok,&msg,sizeof(hw_ts),msg.msg_flags);
+	size = sock_recvmsg(cscok, &msg, sizeof(hw_ts), msg.msg_flags);
 #ifdef MEASURE_ROUNDTRIP_TIME
 	getnstimeofday(&after);
-	before_ns = before.tv_sec*1000000000LL + before.tv_nsec;
-	after_ns = after.tv_sec*1000000000LL + after.tv_nsec;
-	PTP_VIRTUAL_DEBUG_L1("%s: Socket read finished in (%lld)nano sec\n", __func__, (after_ns - before_ns));
+	before_ns = before.tv_sec * 1000000000LL + before.tv_nsec;
+	after_ns = after.tv_sec * 1000000000LL + after.tv_nsec;
+	PTP_VIRTUAL_DEBUG_L1("%s: Socket read finished in (%lld)nano sec\n", __func__,
+	                     (after_ns - before_ns));
 #endif
-	if(error<0) {
+
+	if (error < 0) {
 		PTP_VIRTUAL_ALERT("%s: REC MSG ERROR\n", __func__);
 		goto err;
 	}
-	set_fs(oldfs);
 
+	set_fs(oldfs);
 	ts->tv_sec = hw_ts[0];
 	ts->tv_nsec = hw_ts[1];
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s.\n", __func__);
@@ -217,7 +219,8 @@ err:
 #ifdef PTP_READ_WTIH_VDEV
 static void __iomem *virtbase;
 
-static int PTP_VM_get_time_with_vdev(struct ptp_clock_info *ptp, struct timespec64 *ts)
+static int PTP_VM_get_time_with_vdev(struct ptp_clock_info *ptp,
+                                     struct timespec64 *ts)
 {
 	uint32_t hw_ts[2];
 #ifdef MEASURE_ROUNDTRIP_TIME
@@ -231,20 +234,22 @@ static int PTP_VM_get_time_with_vdev(struct ptp_clock_info *ptp, struct timespec
 	ts->tv_sec = 0;
 	ts->tv_nsec = 0;
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
-	if(virtbase == NULL) {
+
+	if (virtbase == NULL) {
 		PTP_VIRTUAL_ALERT("%s: memory not mapped for vdev\n", __func__);
 		return 0;
 	}
+
 #ifdef MEASURE_ROUNDTRIP_TIME
 	getnstimeofday(&before);
 #endif
 	memcpy_fromio(hw_ts, virtbase, sizeof(hw_ts));
-
 #ifdef MEASURE_ROUNDTRIP_TIME
 	getnstimeofday(&after);
-	before_ns = before.tv_sec*1000000000LL + before.tv_nsec;
-	after_ns = after.tv_sec*1000000000LL + after.tv_nsec;
-	PTP_VIRTUAL_DEBUG_L1("%s: vdev read finished in (%lld)nano sec\n", __func__, (after_ns - before_ns));
+	before_ns = before.tv_sec * 1000000000LL + before.tv_nsec;
+	after_ns = after.tv_sec * 1000000000LL + after.tv_nsec;
+	PTP_VIRTUAL_DEBUG_L1("%s: vdev read finished in (%lld)nano sec\n", __func__,
+	                     (after_ns - before_ns));
 #endif
 	ts->tv_sec = hw_ts[0];
 	ts->tv_nsec = hw_ts[1];
@@ -256,7 +261,6 @@ static int ptp_virtual_setup_vdev(struct device_node *dev_node)
 {
 	int32_t ret = 0;
 	uint32_t dev_addr = 0;
-
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
 	ret = of_property_read_u32(dev_node, "qcom,ptp-vdev-addr", &dev_addr);
 	PTP_VIRTUAL_ALERT("%s: read vdev-addr: %0x\n", __func__, dev_addr);
@@ -302,26 +306,26 @@ static int ptp_virtual_setup_passthrough(struct platform_device *pdev)
 {
 	int32_t ret = 0;
 	struct resource *res;
-
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
-
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ptp_reg");
+
 	if (res) {
 		ntnbase = res->start;
 		ntnbase_size = resource_size(res);
 		PTP_VIRTUAL_ALERT("%s: read ntnbase: 0x%0x size: 0x%x\n",
-				__func__, ntnbase, ntnbase_size);
+		                  __func__, ntnbase, ntnbase_size);
 	} else {
 		PTP_VIRTUAL_ALERT("%s: get ptp_virtual ntnbase resource failed\n", __func__);
 		return -ENODEV;
 	}
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "qtimer_reg");
+
 	if (res) {
 		qtmraddr = res->start;
 		qtmraddr_size = resource_size(res);
 		PTP_VIRTUAL_ALERT("%s: read qtmraddr: 0x%0x size: 0x%x\n",
-				__func__, qtmraddr, qtmraddr_size);
+		                  __func__, qtmraddr, qtmraddr_size);
 	} else {
 		PTP_VIRTUAL_ALERT("%s: get ptp_virtual qtimer_reg resource failed\n", __func__);
 		return -ENODEV;
@@ -336,7 +340,8 @@ static int ptp_virtual_setup_passthrough(struct platform_device *pdev)
 #define MAC_STSR_RgOffAddr ((volatile uint32_t *)(virtbase + 0xb08))
 #define MAC_STNSR_RgOffAddr ((volatile uint32_t *)(virtbase + 0xb0c))
 #define GET_VALUE(data, lbit, hbit) ((data >>lbit) & (~(~0<<(hbit-lbit+1))))
-static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct timespec64 *ts)
+static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
+        struct timespec64 *ts)
 {
 #ifdef MEASURE_ROUNDTRIP_TIME
 	struct timespec64 before;
@@ -347,22 +352,20 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct 
 	uint32_t ns1, ns2;
 	uint32_t varmac_stnsr;
 	uint32_t varmac_stsr;
-
 #ifdef QTIMER_PASS_THRU
-	unsigned long long gvm_tick, host_tick, local_gptp, cur_gptp;
-	uint32_t gvm_tick_lo,gvm_tick_hi, host_tick_lo, host_tick_hi, local_gptp_lo, local_gptp_hi;
+	unsigned long long cur_gptp = 0;
 	uint32_t reminder;
-	uint32_t qtimer_sync_lo=0, qtimer_sync_hi=0;
-	uint32_t gptp_sync_lo=0, gptp_sync_hi=0;
-	uint32_t qtimer_inc_ratio_lo=0, qtimer_inc_ratio_hi=0;
+	uint32_t qtimer_sync_lo = 0, qtimer_sync_hi = 0;
+	uint32_t gptp_sync_lo = 0, gptp_sync_hi = 0;
+	uint32_t qtimer_inc_ratio_lo = 0, qtimer_inc_ratio_hi = 0;
 	long long qtimer_inc_ratio = 0;
 	long long qtimer_sync_val = 0;
 	long long gptp_sync_val = 0;
-	unsigned long long cur_qtimer_ns = 0, cur_qtimer_s = 0;
+	uint64_t cur_qtimer_ns = 0;
 	uint64_t *cur_gptp_mem;
 	uint64_t *monolithic_mem;
-	ktime_t after,before;
-	uint64_t after64,before64,monodiff;
+	ktime_t after, before;
+	uint64_t after64, before64, monodiff;
 	int count = 0;
 	gptp_sync_lo = ioread32((void *)(((volatile uint32_t *)(
 	                                      gptp_virtbase + 0x1000 - 5 * sizeof(uint64_t)))));
@@ -372,9 +375,9 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct 
 	                                        gptp_virtbase + 0x1000 - 6 * sizeof(uint64_t)))));
 	qtimer_sync_hi = ioread32((void *)(((volatile uint32_t *)(
 	                                        gptp_virtbase + 0x1000 - 6 * sizeof(uint64_t) + 4))));
-	qtimer_inc_ratio_lo = ioread32((void *)(((volatile float *)(
+	qtimer_inc_ratio_lo = ioread32((void *)(((volatile uint32_t *)(
 	        gptp_virtbase + 0x1000 - 7 * sizeof(uint64_t)))));
-	qtimer_inc_ratio_hi = ioread32((void *)(((volatile float *)(
+	qtimer_inc_ratio_hi = ioread32((void *)(((volatile uint32_t *)(
 	        gptp_virtbase + 0x1000 - 7 * sizeof(uint64_t) + 4))));
 	cur_gptp_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 3 * sizeof(uint64_t));
 	monolithic_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 4 * sizeof(uint64_t));
@@ -382,8 +385,8 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct 
 	do {
 		local_irq_disable();
 		before = ktime_get();
-		gvm_tick_lo = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase))));
-		gvm_tick_hi = ioread32((void *)(((volatile uint32_t *)(qtimer_virtbase + 4))));
+		cur_qtimer_ns = ioread64((void *)(((volatile uint64_t * )(
+		                                       qtimer_virtbase)))) ; //qtimer ticks
 		after = ktime_get();
 		local_irq_enable();
 		before64 = ktime_to_ns(before);
@@ -391,6 +394,12 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct 
 		monodiff = after64 - before64;
 		count++;
 	} while (monodiff > 20000 && count < 3);
+
+	//multiple by the tick factor.	(1000000000/19200000)
+	cur_qtimer_ns = cur_qtimer_ns*100;
+	cur_qtimer_ns = div64_u64(cur_qtimer_ns,192);
+	cur_qtimer_ns = cur_qtimer_ns*100;
+
 
 	if (count >= 3 && monodiff > 20000) {
 		ts->tv_sec = 0;
@@ -402,26 +411,19 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct 
 		                                  unsigned long long)qtimer_sync_hi << 32));
 		qtimer_inc_ratio = (long long)((unsigned long long)qtimer_inc_ratio_lo | ((
 		                                   unsigned long long)qtimer_inc_ratio_hi << 32));
-		gvm_tick = (unsigned long long)((unsigned long long)gvm_tick_lo | ((
-		                                    unsigned long long)gvm_tick_hi << 32));
-		cur_qtimer_s = (gvm_tick / 19200000ULL);
-		cur_qtimer_ns = (gvm_tick % 19200000ULL);
-		cur_qtimer_ns *= 1000000000ULL;
-		cur_qtimer_ns /= 19200000ULL;
-		cur_qtimer_ns += (cur_qtimer_s * 1000000000);
-		cur_gptp = (unsigned long long)(gptp_sync_val + ((cur_qtimer_ns -
-		                                qtimer_sync_val) * qtimer_inc_ratio) / 1000000000);
+		cur_gptp = (unsigned long long)(gptp_sync_val + div64_u64(((cur_qtimer_ns -
+		                                qtimer_sync_val) * qtimer_inc_ratio), 1000000000));
 		ts->tv_sec = div_u64_rem(cur_gptp, 1000000000ULL, &reminder);
 		ts->tv_nsec = reminder;
 	}
 
-	iowrite64(before64+(monodiff/2), monolithic_mem);
+	iowrite64(before64 + div64_u64(monodiff, 2), monolithic_mem);
 	iowrite64(cur_gptp, cur_gptp_mem);
-
+	PTP_VIRTUAL_DEBUG_L1("%s: cur_gptp_ns: %lld cur_qtimer_ns %lld monotonic_time_ns %lld gptp_sync_val %lld qtimer_sync_val %lld",
+	                     __func__, cur_gptp, cur_qtimer_ns, before64 + div64_u64(monodiff, 2),gptp_sync_val,qtimer_sync_val);
 	return 0;
 #endif
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
-
 #ifdef MEASURE_ROUNDTRIP_TIME
 	getnstimeofday(&before);
 #endif
@@ -429,20 +431,19 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp, struct 
 	varmac_stnsr = ioread32((void *)MAC_STNSR_RgOffAddr);
 	ns1 = GET_VALUE(varmac_stnsr, 0, 30);
 	varmac_stsr = ioread32((void *)MAC_STSR_RgOffAddr);
-
 	/* Read the nanoseconds again */
 	varmac_stnsr = ioread32((void *)MAC_STNSR_RgOffAddr);
 	ns2 = GET_VALUE(varmac_stnsr, 0, 30);
-
 #ifdef MEASURE_ROUNDTRIP_TIME
 	getnstimeofday(&after);
-	before_ns = before.tv_sec*1000000000LL + before.tv_nsec;
-	after_ns = after.tv_sec*1000000000LL + after.tv_nsec;
-	PTP_VIRTUAL_DEBUG_L1("%s: vdev read finished in (%lld)nano sec\n", __func__, (after_ns - before_ns));
+	before_ns = before.tv_sec * 1000000000LL + before.tv_nsec;
+	after_ns = after.tv_sec * 1000000000LL + after.tv_nsec;
+	PTP_VIRTUAL_DEBUG_L1("%s: vdev read finished in (%lld)nano sec\n", __func__,
+	                     (after_ns - before_ns));
 #endif
 	ns1 = ns2;
-	PTP_VIRTUAL_DEBUG_L1("%s: varmac_stsr is %d varmac_stnsr is %d \n", __func__, varmac_stsr, varmac_stnsr);
-
+	PTP_VIRTUAL_DEBUG_L1("%s: varmac_stsr is %d varmac_stnsr is %d \n", __func__,
+	                     varmac_stsr, varmac_stnsr);
 	ts->tv_sec = varmac_stsr;
 	ts->tv_nsec = ns2;
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s.\n", __func__);
@@ -465,7 +466,8 @@ static int PTP_VM_adjust_time(struct ptp_clock_info *ptp, s64 delta)
 }
 
 
-static int PTP_VM_set_time(struct ptp_clock_info *ptp, const struct timespec64 *ts)
+static int PTP_VM_set_time(struct ptp_clock_info *ptp,
+                           const struct timespec64 *ts)
 {
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s.\n", __func__);
@@ -473,20 +475,20 @@ static int PTP_VM_set_time(struct ptp_clock_info *ptp, const struct timespec64 *
 }
 
 static int PTP_VM_enable(struct ptp_clock_info *ptp,
-        struct ptp_clock_request *rq, int on)
+                         struct ptp_clock_request *rq, int on)
 {
-        return -EOPNOTSUPP;
+	return -EOPNOTSUPP;
 }
 
 static struct ptp_clock_info PTP_VM_ptp_clock_ops = {
 	.owner = THIS_MODULE,
 	.name = "ptp_virtual",
 	.max_adj = PTP_MV_SYSCLOCK, /* the max possible frequency adjustment,
-				in parts per billion */
-	.n_alarm = 0,	/* the number of programmable alarms */
-	.n_ext_ts = 0,	/* the number of externel time stamp channels */
+                in parts per billion */
+	.n_alarm = 0,   /* the number of programmable alarms */
+	.n_ext_ts = 0,  /* the number of externel time stamp channels */
 	.n_per_out = 0, /* the number of programmable periodic signals */
-	.pps = 0,	/* indicates whether the clk supports a PPS callback */
+	.pps = 0,   /* indicates whether the clk supports a PPS callback */
 	.adjfreq = PTP_VM_adjust_freq,
 	.adjtime = PTP_VM_adjust_time,
 #if ( (LINUX_VERSION_CODE) > (KERNEL_VERSION(4,1,0)) )
@@ -506,15 +508,14 @@ static int ptp_virtual_get_dts_config(struct platform_device *pdev)
 {
 	int32_t ret = 0;
 	struct resource *res;
-
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
-
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+
 	if (res) {
 		carveout_memory_address = res->start;
 		carveout_memory_size = resource_size(res);
 		PTP_VIRTUAL_ALERT("%s: read reserved-addr: 0x%0x size: 0x%x\n",
-				__func__, carveout_memory_address, carveout_memory_size);
+		                  __func__, carveout_memory_address, carveout_memory_size);
 	} else {
 		PTP_VIRTUAL_ALERT("%s: get ptp_virtual register resource failed\n", __func__);
 		return -ENODEV;
@@ -528,32 +529,30 @@ static int ptp_virtual_get_dts_config(struct platform_device *pdev)
 static int ptp_virtual_probe(struct platform_device *pdev)
 {
 	int ret = 0;
-
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s\n", __func__);
 #ifdef GPTP_GVM_SHM_MODE
 	ret = ptp_virtual_get_dts_config(pdev);
 #endif
 #ifdef PTP_READ_WTIH_VDEV
 	ptp_vm_clk = ptp_clock_register(&PTP_VM_ptp_clock_ops, NULL);
+
 	if (IS_ERR(ptp_vm_clk)) {
 		PTP_VIRTUAL_ALERT("%s: ptp clock registratin failed\n", __func__);
 		ptp_vm_clk = NULL;
 	} else {
 		PTP_VIRTUAL_ALERT("%s: ptp clock registered:\n", __func__);
 	}
+
 #endif
 #ifdef PTP_READ_WTIH_SOCKET
 	ret = ptp_virtual_setup_socket();
 #endif
-
 #ifdef PTP_READ_WTIH_VDEV
 	ret = ptp_virtual_setup_vdev(pdev->dev.of_node);
 #endif
-
 #ifdef PTP_READ_WTIH_PASS_THRU
 	ret = ptp_virtual_setup_passthrough(pdev);
 #endif
-
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s\n", __func__);
 	return ret;
 }
@@ -561,7 +560,6 @@ static int ptp_virtual_probe(struct platform_device *pdev)
 static int ptp_virtual_remove(struct platform_device *pdev)
 {
 	int ret = 0;
-
 	PTP_VIRTUAL_DEBUG_L1("Entry:%s.\n", __func__);
 #ifdef PTP_READ_WTIH_VDEV
 	ptp_clock_unregister(ptp_vm_clk);
@@ -572,41 +570,45 @@ static int ptp_virtual_remove(struct platform_device *pdev)
 }
 
 static struct of_device_id ptp_virtual_match[] = {
-	{	.compatible = "qcom,ptp_virtual",
+	{
+		.compatible = "qcom,ptp_virtual",
 	},
 	{}
 };
 
 static struct platform_driver ptp_virtual_driver = {
-	.probe	= ptp_virtual_probe,
-	.remove	= ptp_virtual_remove,
-	.driver	= {
-		.name		= "ptp_virtual",
-		.owner		= THIS_MODULE,
-		.of_match_table	= ptp_virtual_match,
+	.probe  = ptp_virtual_probe,
+	.remove = ptp_virtual_remove,
+	.driver = {
+		.name       = "ptp_virtual",
+		.owner      = THIS_MODULE,
+		.of_match_table = ptp_virtual_match,
 	},
 };
 
 #ifdef GPTP_GVM_SHM_MODE
 static int gptp_shm_mmap(struct file *file, struct vm_area_struct *vma)
 {
-	unsigned long pfn_start = (unsigned long)(carveout_memory_address >> PAGE_SHIFT) + vma->vm_pgoff;
+	unsigned long pfn_start = (unsigned long)(carveout_memory_address >> PAGE_SHIFT)
+	                          + vma->vm_pgoff;
 	unsigned long size = vma->vm_end - vma->vm_start;
 	int ret = 0;
-
 	vma->vm_page_prot = PAGE_SHARED;
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+
 	if (size > carveout_memory_size) {
 		pr_err("MMAP size exceeds reserved memory size");
 		return -EINVAL;
 	}
+
 	ret = remap_pfn_range(vma, vma->vm_start, pfn_start, size, vma->vm_page_prot);
+
 	if (ret)
 		printk("%s: remap_pfn_range failed at [0x%lx  0x%lx]\n",
-				__func__, vma->vm_start, vma->vm_end);
+		       __func__, vma->vm_start, vma->vm_end);
 	else
 		printk("%s: map 0x%lx to 0x%lx, size: 0x%lx\n", __func__, pfn_start,
-				vma->vm_start, size);
+		       vma->vm_start, size);
 
 	return ret;
 }
@@ -662,60 +664,72 @@ static struct miscdevice qtimer_shm_misc = {
 static int __init ptp_virtual_init(void)
 {
 	int ret = 0;
-
 	PTP_VIRTUAL_DEBUG_L1("Entry:%s.\n", __func__);
-
 	ret = platform_driver_register(&ptp_virtual_driver);
+
 	if (unlikely(ret)) {
 		pr_err("failed to register platform driver!\n");
 	} else {
 		printk("platform_driver_register OK.\r\n");
 	}
+
 #ifdef GPTP_GVM_SHM_MODE
 	ret = misc_register(&gptp_shm_misc);
+
 	if (unlikely(ret)) {
 		pr_err("failed to register misc device!\n");
 	} else {
 		printk("misc_register OK.\r\n");
 	}
-/*
-	ret = misc_register(&qtimer_shm_misc);
-	if (unlikely(ret)) {
-		pr_err("failed to register qtimer misc device!\n");
-	} else {
-		printk("misc_register qtimer OK.\r\n");
-	}
-*/
+
+	/*
+	    ret = misc_register(&qtimer_shm_misc);
+	    if (unlikely(ret)) {
+	        pr_err("failed to register qtimer misc device!\n");
+	    } else {
+	        printk("misc_register qtimer OK.\r\n");
+	    }
+	*/
 #endif
 #ifdef PTP_READ_WTIH_PASS_THRU
 
-	if(!ntnbase)
-	virtbase = ioremap(NTN_BASE_ADDRESS, 0x1000);
-	else
-	virtbase = ioremap(ntnbase, 0x1000);
+	if (!ntnbase) {
+		virtbase = ioremap(NTN_BASE_ADDRESS, 0x1000);
+	} else {
+		virtbase = ioremap(ntnbase, 0x1000);
+	}
 
-	PTP_VIRTUAL_ALERT("%s: virtbase: %0x %0x\n", __func__, virtbase,ntnbase);
+	PTP_VIRTUAL_ALERT("%s: virtbase: %0x %0x\n", __func__, virtbase, ntnbase);
 #ifdef QTIMER_PASS_THRU
-	if(!qtmraddr)
-	qtimer_virtbase = ioremap(QTMR0_F0V2_QTMR_V2_ADDR, QTMR0_F0V2_QTMR_V2_SIZE);
-	else
-	qtimer_virtbase = ioremap(qtmraddr, QTMR0_F0V2_QTMR_V2_SIZE);
 
-	PTP_VIRTUAL_ALERT("%s: qtimer_virtbase: %0x %0x\n", __func__, qtimer_virtbase,qtmraddr);
+	if (!qtmraddr) {
+		qtimer_virtbase = ioremap(QTMR0_F0V2_QTMR_V2_ADDR, QTMR0_F0V2_QTMR_V2_SIZE);
+	} else {
+		qtimer_virtbase = ioremap(qtmraddr, QTMR0_F0V2_QTMR_V2_SIZE);
+	}
+
+	PTP_VIRTUAL_ALERT("%s: qtimer_virtbase: %0x %0x\n", __func__, qtimer_virtbase,
+	                  qtmraddr);
+
 	if (carveout_memory_address) {
 		gptp_virtbase = ioremap(carveout_memory_address, 0x1000);
 		PTP_VIRTUAL_ALERT("%s: gptp_virtbase: %0x\n", __func__, gptp_virtbase);
 	}
-	if (!qtimer_virtbase || !gptp_virtbase)
+
+	if (!qtimer_virtbase || !gptp_virtbase) {
 		PTP_VIRTUAL_ALERT("%s: ioremap qtimer and gptp memory failed\n", __func__);
+	}
+
 #endif
 	ptp_vm_clk = ptp_clock_register(&PTP_VM_ptp_clock_ops, NULL);
+
 	if (IS_ERR(ptp_vm_clk)) {
 		PTP_VIRTUAL_ALERT("%s: ptp clock registratin failed\n", __func__);
 		ptp_vm_clk = NULL;
 	} else {
 		PTP_VIRTUAL_ALERT("%s: ptp clock registered:\n", __func__);
 	}
+
 #endif
 	PTP_VIRTUAL_DEBUG_L1("Exit:%s.\n", __func__);
 	return ret;
