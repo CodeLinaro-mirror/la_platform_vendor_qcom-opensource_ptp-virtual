@@ -63,6 +63,7 @@
 #define PTP_VIRTUAL_DEBUG_L1(...)
 #endif
 #define PTP_VIRTUAL_ALERT(...) printk(KERN_ERR __VA_ARGS__)
+#define PTP_VIRTUAL_INFO(...)  printk(KERN_INFO __VA_ARGS__)
 
 #ifdef PTP_READ_WTIH_SOCKET
 #define PTP_VM_get_time PTP_VM_get_time_with_socket
@@ -312,7 +313,7 @@ static int ptp_virtual_setup_passthrough(struct platform_device *pdev)
 	if (res) {
 		ntnbase = res->start;
 		ntnbase_size = resource_size(res);
-		PTP_VIRTUAL_ALERT("%s: read ntnbase: 0x%0x size: 0x%x\n",
+		PTP_VIRTUAL_INFO("%s: read ntnbase: 0x%0x size: 0x%x\n",
 		                  __func__, ntnbase, ntnbase_size);
 	} else {
 		PTP_VIRTUAL_ALERT("%s: get ptp_virtual ntnbase resource failed\n", __func__);
@@ -324,7 +325,7 @@ static int ptp_virtual_setup_passthrough(struct platform_device *pdev)
 	if (res) {
 		qtmraddr = res->start;
 		qtmraddr_size = resource_size(res);
-		PTP_VIRTUAL_ALERT("%s: read qtmraddr: 0x%0x size: 0x%x\n",
+		PTP_VIRTUAL_INFO("%s: read qtmraddr: 0x%0x size: 0x%x\n",
 		                  __func__, qtmraddr, qtmraddr_size);
 	} else {
 		PTP_VIRTUAL_ALERT("%s: get ptp_virtual qtimer_reg resource failed\n", __func__);
@@ -514,7 +515,7 @@ static int ptp_virtual_get_dts_config(struct platform_device *pdev)
 	if (res) {
 		carveout_memory_address = res->start;
 		carveout_memory_size = resource_size(res);
-		PTP_VIRTUAL_ALERT("%s: read reserved-addr: 0x%0x size: 0x%x\n",
+		PTP_VIRTUAL_INFO("%s: read reserved-addr: 0x%0x size: 0x%x\n",
 		                  __func__, carveout_memory_address, carveout_memory_size);
 	} else {
 		PTP_VIRTUAL_ALERT("%s: get ptp_virtual register resource failed\n", __func__);
@@ -699,7 +700,7 @@ static int __init ptp_virtual_init(void)
 		virtbase = ioremap(ntnbase, 0x1000);
 	}
 
-	PTP_VIRTUAL_ALERT("%s: virtbase: %0x %0x\n", __func__, virtbase, ntnbase);
+	PTP_VIRTUAL_INFO("%s: virtbase: %0x %0x\n", __func__, virtbase, ntnbase);
 #ifdef QTIMER_PASS_THRU
 
 	if (!qtmraddr) {
@@ -708,12 +709,12 @@ static int __init ptp_virtual_init(void)
 		qtimer_virtbase = ioremap(qtmraddr, QTMR0_F0V2_QTMR_V2_SIZE);
 	}
 
-	PTP_VIRTUAL_ALERT("%s: qtimer_virtbase: %0x %0x\n", __func__, qtimer_virtbase,
+	PTP_VIRTUAL_INFO("%s: qtimer_virtbase: %0x %0x\n", __func__, qtimer_virtbase,
 	                  qtmraddr);
 
 	if (carveout_memory_address) {
 		gptp_virtbase = ioremap(carveout_memory_address, 0x1000);
-		PTP_VIRTUAL_ALERT("%s: gptp_virtbase: %0x\n", __func__, gptp_virtbase);
+		PTP_VIRTUAL_INFO("%s: gptp_virtbase: %0x\n", __func__, gptp_virtbase);
 	}
 
 	if (!qtimer_virtbase || !gptp_virtbase) {
@@ -727,7 +728,7 @@ static int __init ptp_virtual_init(void)
 		PTP_VIRTUAL_ALERT("%s: ptp clock registratin failed\n", __func__);
 		ptp_vm_clk = NULL;
 	} else {
-		PTP_VIRTUAL_ALERT("%s: ptp clock registered:\n", __func__);
+		PTP_VIRTUAL_INFO("%s: ptp clock registered:\n", __func__);
 	}
 
 #endif
