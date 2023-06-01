@@ -3,7 +3,7 @@
 ifeq ($(TARGET_BOARD_AUTO),true)
 LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
-
+LOCAL_CFLAGS += -Wdeclaration-after-statement
 # This makefile is only for DLKM
 ifneq ($(findstring vendor,$(LOCAL_PATH)),)
 
@@ -17,8 +17,13 @@ DLKM_DIR := ./device/qcom/common/dlkm
 KBUILD_OPTIONS := $(PTPVIRT_BLD_DIR)
 
 LOCAL_MODULE := ptp_virtual.ko
+BOARD_VENDOR_KERNEL_MODULES := $(KERNEL_MODULES_OUT)/ptp_virtual.ko
 
+ifeq ($(TARGET_USES_KERNEL_PLATFORM),true)
+include $(DLKM_DIR)/Build_external_kernelmodule.mk
+else
 include $(DLKM_DIR)/AndroidKernelModule.mk
+endif
 endif
 endif
 
