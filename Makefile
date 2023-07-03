@@ -1,32 +1,16 @@
-export PTPSUPPORT CONFIG_PTPSUPPORT_OBJ
+# Makefile for use with Android's kernel/build system
+KBUILD_OPTIONS += PTP_KERNEL_ROOT=$(shell pwd)
+KBUILD_OPTIONS += KERNEL_ROOT=$(ROOT_DIR)/$(KERNEL_DIR)
+KBUILD_OPTIONS += MODNAME=ptp_virtual
+PTP_BLD_DIR := ../../vendor/qcom/opensource/ptp-virtual/
 
-PTPSUPPORT=y	#ptp is enabled
+all: modules
 
-ifeq ($(RELEASE_PACKAGE),1)
-EXTRA_CFLAGS+=-DRELEASE_PACKAGE
-endif
-LBITS ?= $(shell getconf LONG_BIT)
-ifeq ($(LBITS),64)
-CCFLAGS += -m64
-EXTRA_CFLAGS+=-DSYSTEM_IS_64
-else
-CCFLAGS += -m32
-endif
-
-CONFIG_PTPSUPPORT_OBJ=y
-EXTRA_CFLAGS+=-DCONFIG_PTPSUPPORT_OBJ
-
-obj-m := ptp_virtual.o
-
-ptp_virtual-y += ptp_virtual_module.o
-
-KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
-
-all:
-	$(MAKE) -C $(KERNEL_SRC) M=$(shell pwd) modules $(KBUILD_OPTIONS)
+modules dtbs:
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) modules $(KBUILD_OPTIONS)
 
 modules_install:
-	$(MAKE) -C $(KERNEL_SRC) M=$(shell pwd) modules_install
+	$(MAKE) M=$(M) -C $(KERNEL_SRC) modules_install
 
 clean:
-	$(MAKE) -C $(KERNEL_SRC) M=$(PWD) clean
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) clean

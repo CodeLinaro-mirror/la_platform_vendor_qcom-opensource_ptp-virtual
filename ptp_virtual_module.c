@@ -336,9 +336,14 @@ static int ptp_virtual_setup_passthrough(struct platform_device *pdev)
 }
 
 #endif
-
+/*Enable below macros for Makena platform*/
 #define MAC_STSR_RgOffAddr ((volatile uint32_t *)(virtbase + 0xb08))
 #define MAC_STNSR_RgOffAddr ((volatile uint32_t *)(virtbase + 0xb0c))
+
+/*Enable below macros for Hana platform*/
+//#define MAC_STSR_RgOffAddr ((volatile uint32_t *)(virtbase - 4))
+//#define MAC_STNSR_RgOffAddr ((volatile uint32_t *)(virtbase))
+
 #define GET_VALUE(data, lbit, hbit) ((data >>lbit) & (~(~0<<(hbit-lbit+1))))
 static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
         struct timespec64 *ts)
@@ -349,9 +354,11 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
 	unsigned long long before_ns;
 	unsigned long long after_ns;
 #endif
-	uint32_t ns1, ns2;
-	uint32_t varmac_stnsr;
-	uint32_t varmac_stsr;
+	uint64_t ns1 = 0, ns2 = 0;
+	uint64_t varmac_stnsr = 0;
+	uint64_t varmac_stsr = 0;
+	uint64_t varmac_stsr_pre = 0;
+	int32_t diff_gptp_time = 0;
 #ifdef QTIMER_PASS_THRU
 	unsigned long long cur_gptp = 0;
 	uint32_t reminder;
@@ -366,27 +373,38 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
 	uint64_t *monolithic_mem;
 	ktime_t after, before;
 	uint64_t after64, before64, monodiff;
+	uint32_t a_lock1_mem;
+	uint32_t a_lock2_mem;
 	int count = 0;
-	gptp_sync_lo = ioread32((void *)(((volatile uint32_t *)(
+	int mem_count = 0;
+	if (ts == NULL) {
+		PTP_VIRTUAL_ALERT("%s ivalid timespec ts value\n", __func__);
+		return -EFAULT;
+	}
+	do {
+		gptp_sync_lo = ioread32((void *)(((volatile uint32_t *)(
 	                                      gptp_virtbase + 0x1000 - 5 * sizeof(uint64_t)))));
-	gptp_sync_hi = ioread32((void *)(((volatile uint32_t *)(
+		gptp_sync_hi = ioread32((void *)(((volatile uint32_t *)(
 	                                      gptp_virtbase + 0x1000 - 5 * sizeof(uint64_t) + 4))));
-	qtimer_sync_lo = ioread32((void *)(((volatile uint32_t *)(
+		qtimer_sync_lo = ioread32((void *)(((volatile uint32_t *)(
 	                                        gptp_virtbase + 0x1000 - 6 * sizeof(uint64_t)))));
-	qtimer_sync_hi = ioread32((void *)(((volatile uint32_t *)(
+		qtimer_sync_hi = ioread32((void *)(((volatile uint32_t *)(
 	                                        gptp_virtbase + 0x1000 - 6 * sizeof(uint64_t) + 4))));
-	qtimer_inc_ratio_lo = ioread32((void *)(((volatile uint32_t *)(
+		qtimer_inc_ratio_lo = ioread32((void *)(((volatile uint32_t *)(
 	        gptp_virtbase + 0x1000 - 7 * sizeof(uint64_t)))));
-	qtimer_inc_ratio_hi = ioread32((void *)(((volatile uint32_t *)(
+		qtimer_inc_ratio_hi = ioread32((void *)(((volatile uint32_t *)(
 	        gptp_virtbase + 0x1000 - 7 * sizeof(uint64_t) + 4))));
-	cur_gptp_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 3 * sizeof(uint64_t));
-	monolithic_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 4 * sizeof(uint64_t));
-
+		cur_gptp_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 3 * sizeof(uint64_t));
+		monolithic_mem = (uint64_t *) (gptp_virtbase + 0x1000 - 4 * sizeof(uint64_t));
+		a_lock1_mem = ioread32((void *)((volatile uint32_t *)(gptp_virtbase + 0x1000 - 7*sizeof(uint64_t) - sizeof(uint32_t))));
+		a_lock2_mem = ioread32((void *)((volatile uint32_t *)(gptp_virtbase + 0x1000 - 7*sizeof(uint64_t) - 2*sizeof(uint32_t))));
+        mem_count++;
+	} while((a_lock1_mem != a_lock2_mem) && (mem_count < 3));
 	do {
 		local_irq_disable();
 		before = ktime_get();
 		cur_qtimer_ns = ioread64((void *)(((volatile uint64_t * )(
-		                                       qtimer_virtbase)))) * div64_u64(1000000000, 19200000);
+		                                       qtimer_virtbase)))) ; //qtimer ticks
 		after = ktime_get();
 		local_irq_enable();
 		before64 = ktime_to_ns(before);
@@ -394,6 +412,12 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
 		monodiff = after64 - before64;
 		count++;
 	} while (monodiff > 20000 && count < 3);
+
+	//multiple by the tick factor.	(1000000000/19200000)
+	cur_qtimer_ns = cur_qtimer_ns*100;
+	cur_qtimer_ns = div64_u64(cur_qtimer_ns,192);
+	cur_qtimer_ns = cur_qtimer_ns*100;
+
 
 	if (count >= 3 && monodiff > 20000) {
 		ts->tv_sec = 0;
@@ -413,21 +437,27 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
 
 	iowrite64(before64 + div64_u64(monodiff, 2), monolithic_mem);
 	iowrite64(cur_gptp, cur_gptp_mem);
-	PTP_VIRTUAL_DEBUG_L1("%s: cur_gptp_ns: %lld cur_qtimer_ns %lld monotonic_time_ns %lld",
-	                     __func__, cur_gptp, cur_qtimer_ns, before64 + div64_u64(monodiff, 2));
+	PTP_VIRTUAL_DEBUG_L1("%s: cur_gptp_ns: %lld cur_qtimer_ns %lld monotonic_time_ns %lld gptp_sync_val %lld qtimer_sync_val %lld",
+	                     __func__, cur_gptp, cur_qtimer_ns, before64 + div64_u64(monodiff, 2),gptp_sync_val,qtimer_sync_val);
+	if (cur_gptp == 0) {
+		PTP_VIRTUAL_ALERT("%s: unable to fetch current gptp time %ld", __func__, cur_gptp);
+		return -EINVAL;
+	}
 	return 0;
 #endif
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
 #ifdef MEASURE_ROUNDTRIP_TIME
 	getnstimeofday(&before);
 #endif
-	/* Read the nanoseconds once */
-	varmac_stnsr = ioread32((void *)MAC_STNSR_RgOffAddr);
-	ns1 = GET_VALUE(varmac_stnsr, 0, 30);
-	varmac_stsr = ioread32((void *)MAC_STSR_RgOffAddr);
-	/* Read the nanoseconds again */
-	varmac_stnsr = ioread32((void *)MAC_STNSR_RgOffAddr);
-	ns2 = GET_VALUE(varmac_stnsr, 0, 30);
+    do {
+		/* Read the seconds */
+		varmac_stsr_pre = (uint64_t)ioread32((void *)MAC_STSR_RgOffAddr);
+		/* Read the nanoseconds once */
+		varmac_stnsr = (uint64_t)ioread32((void *)MAC_STNSR_RgOffAddr);
+		ns1 = GET_VALUE(varmac_stnsr, 0, 30);
+		/* Read the seconds */
+		varmac_stsr = (uint64_t)ioread32((void *)MAC_STSR_RgOffAddr);
+	} while (varmac_stsr_pre != varmac_stsr);
 #ifdef MEASURE_ROUNDTRIP_TIME
 	getnstimeofday(&after);
 	before_ns = before.tv_sec * 1000000000LL + before.tv_nsec;
@@ -435,11 +465,13 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
 	PTP_VIRTUAL_DEBUG_L1("%s: vdev read finished in (%lld)nano sec\n", __func__,
 	                     (after_ns - before_ns));
 #endif
-	ns1 = ns2;
 	PTP_VIRTUAL_DEBUG_L1("%s: varmac_stsr is %d varmac_stnsr is %d \n", __func__,
 	                     varmac_stsr, varmac_stnsr);
 	ts->tv_sec = varmac_stsr;
-	ts->tv_nsec = ns2;
+	ts->tv_nsec = ns1;
+	ns2 = varmac_stsr * 1000000000LL + ns1;
+	diff_gptp_time = ns2 - cur_gptp;
+	PTP_VIRTUAL_ALERT("%s: gptp_reg_time %lldns carveout_gptp_time = %lldns diff = %dns\n", __func__, ns2, cur_gptp, diff_gptp_time);
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s.\n", __func__);
 	return 0;
 }
@@ -707,7 +739,7 @@ static int __init ptp_virtual_init(void)
 
 	if (carveout_memory_address) {
 		gptp_virtbase = ioremap(carveout_memory_address, 0x1000);
-		PTP_VIRTUAL_ALERT("%s: gptp_virtbase: %0x\n", __func__, gptp_virtbase);
+		PTP_VIRTUAL_ALERT("%s: gptp_virtbase: %0x %0x\n", __func__, gptp_virtbase, carveout_memory_address);
 	}
 
 	if (!qtimer_virtbase || !gptp_virtbase) {
