@@ -1,16 +1,16 @@
+# Makefile for use with Android's kernel/build system
+KBUILD_OPTIONS += EAVB_KERNEL_ROOT=$(shell pwd)
+KBUILD_OPTIONS += KERNEL_ROOT=$(ROOT_DIR)/$(KERNEL_DIR)
+KBUILD_OPTIONS += MODNAME=eavb_fe
+EAVB_BLD_DIR := ../../../vendor/qcom/opensource/ptp-virtual/eavb_fe
 
-# Kernel module instructions go here.
-obj-m := eavb_fe.o
+all: modules
 
-eavb_fe-y := virtio_eavb.o
-
-KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
-
-all:
-	$(MAKE) -C $(KERNEL_SRC) M=$(shell pwd) modules $(KBUILD_OPTIONS)
+modules dtbs:
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) modules $(KBUILD_OPTIONS)
 
 modules_install:
-	$(MAKE) -C $(KERNEL_SRC) M=$(shell pwd) modules_install
+	$(MAKE) M=$(M) -C $(KERNEL_SRC) modules_install
 
 clean:
-	$(MAKE) -C $(KERNEL_SRC) M=$(PWD) clean
+	$(MAKE) -C $(KERNEL_SRC) M=$(M) clean

@@ -7,7 +7,6 @@ DLKM_DIR := $(TOP)/device/qcom/common/dlkm
 KBUILD_OPTIONS += KERNEL_ROOT=$(shell pwd)/kernel/msm-$(TARGET_KERNEL_VERSION)/
 KBUILD_OPTIONS += MODNAME=ptp_virtual
 KBUILD_OPTIONS += BOARD_PLATFORM=$(TARGET_BOARD_PLATFORM)
-#KBUILD_OPTIONS += CONFIG_HSI2S=y
 $(info value of TARGET_USES_KERNEL_PLATFORM IS '$(TARGET_USES_KERNEL_PLATFORM)')
 
 #Clear Environment Variables
@@ -23,3 +22,10 @@ LOCAL_MODULE              := ptp_virtual.ko
 LOCAL_MODULE_TAGS         := optional
 
 include $(DLKM_DIR)/Build_external_kernelmodule.mk
+  
+ifeq ($(TARGET_BOARD_SUFFIX),_gvm)  
+include $(CLEAR_VARS)
+LOCAL_EAVB_PATH := $(LOCAL_PATH)
+include $(call first-makefiles-under,$(LOCAL_EAVB_PATH))
+endif
+
