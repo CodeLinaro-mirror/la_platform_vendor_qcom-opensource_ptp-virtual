@@ -760,8 +760,8 @@ static int __init ptp_virtual_init(void)
 	                  qtmraddr);
 
 	if (carveout_memory_address) {
-		gptp_virtbase = ioremap(carveout_memory_address, 0x1000);
-		PTP_VIRTUAL_ALERT("%s: gptp_virtbase: %0x %0x\n", __func__, gptp_virtbase,
+		gptp_virtbase = memremap(carveout_memory_address, 0x1000, MEMREMAP_WB);//ioremap(carveout_memory_address, 0x1000);
+		PTP_VIRTUAL_ALERT("%s: gptp_virtbase memremap: %0x %0x\n", __func__, gptp_virtbase,
 		                  carveout_memory_address);
 	}
 
