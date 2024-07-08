@@ -22,8 +22,8 @@ LOCAL_MODULE              := ptp_virtual.ko
 LOCAL_MODULE_TAGS         := optional
 
 include $(DLKM_DIR)/Build_external_kernelmodule.mk
-  
-ifeq ($(TARGET_BOARD_SUFFIX),_gvm)  
+
+ifeq (,$(findstring $(TARGET_BOARD_SUFFIX), _gvm))
 include $(CLEAR_VARS)
 LOCAL_EAVB_PATH := $(LOCAL_PATH)
 include $(call first-makefiles-under,$(LOCAL_EAVB_PATH))
