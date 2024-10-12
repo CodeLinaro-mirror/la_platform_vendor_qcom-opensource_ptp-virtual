@@ -1289,7 +1289,6 @@ static int qavb_transmit(struct eavb_file *fl, void __user *buf)
 	ASSERT(sizeof(vmsg->data) == sizeof(transmit.data));
 	memcpy(&vmsg->data, &transmit.data, sizeof(vmsg->data));
 
-	vmsg->mapping_size = mapping->size;
 	vmsg->data.gpa = get_mapping_phyaddr(mapping, transmit.data.pbuf);
 	LOG_EAVB(LEVEL_DEBUG, "pass phy address 0x%llx\n", vmsg->data.gpa);
 	LOG_EAVB(LEVEL_DEBUG, "stream%d (ctx 0x%llx, idx %d)\n",
@@ -1302,6 +1301,10 @@ static int qavb_transmit(struct eavb_file *fl, void __user *buf)
 		ret = vhdr->result;
 		vmsg = (struct vio_transmit_msg *)vhdr;
 		transmit.written = vmsg->written;
+		memcpy(&transmit.data, &vmsg->data,
+				sizeof(struct eavb_buf_data));
+		if (transmit.written)
+			LOG_EAVB(LEVEL_DEBUG, "M - DRIVER EAVB FE First transmitted data\n");
 	}
 
 	virt_free_msg(priv, msg);
@@ -1412,7 +1415,7 @@ static int virtio_eavb_mmap(struct file *file, struct vm_area_struct *vma)
 	}
 
 	vsize = vma->vm_end - vma->vm_start;
-	LOG_EAVB(LEVEL_DEBUG, "vsize = %ld(0x%lx~0x%lx)\n",
+	LOG_EAVB(LEVEL_INFO, "virtio_eavb_mmap: vsize = %ld(0x%lx~0x%lx)\n",
 		vsize, vma->vm_start, vma->vm_end);
 	buf = kmalloc(vsize, GFP_KERNEL);
 	if (!buf) {
