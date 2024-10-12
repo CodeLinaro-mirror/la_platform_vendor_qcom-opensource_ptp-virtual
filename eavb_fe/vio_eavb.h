@@ -189,6 +189,8 @@ struct eavb_stream_info {
 	unsigned int max_buffer_size;
     /* qavb ring buffer size*/
     uint32_t ring_buffer_size;
+    int blocking_write;
+    double fill_level;
 } __packed;
 
 
@@ -240,7 +242,7 @@ struct eavb_buf_hdr {
 
 	uint32_t reserved;
 	uint32_t payload_size; /* Size of the payload (bytes) */
-    uint32_t buf_ele_count;
+	int32_t buf_ele_count;
 } __packed;
 
 struct eavb_buf_data {
@@ -263,7 +265,6 @@ struct vio_transmit_msg {
 	struct vio_msg_hdr mhdr;
 	struct eavb_buf_data data; /* IN/OUT */
 	int32_t written;
-	uint32_t mapping_size;
 } __packed;
 
 
