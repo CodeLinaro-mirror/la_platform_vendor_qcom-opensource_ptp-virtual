@@ -285,6 +285,8 @@ struct eavb_ioctl_stream_info {
 	unsigned int max_buffer_size;
     /* qavb ring buffer size */
     __u32 ring_buffer_size;
+    int blocking_write;
+    double fill_level;
 } __attribute__((packed));
 
 struct eavb_ioctl_get_stream_info {
@@ -331,7 +333,7 @@ struct eavb_ioctl_buf_hdr {
 	__u32 reserved;
 	/* Size of the payload (bytes) */
 	__u32 payload_size;
-    __u32 buf_ele_count;
+	__s32 buf_ele_count;
 } __attribute__((packed));
 
 struct eavb_ioctl_buf_data {
