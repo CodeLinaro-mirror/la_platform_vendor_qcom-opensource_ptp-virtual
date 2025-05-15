@@ -1,6 +1,11 @@
 #This makefile is only to compile ptp-virtual driver for AUTO platform
 
 LOCAL_PATH := $(call my-dir)
+
+$(warning @@@@@ptp_virtual@@@@@@@)
+LOCAL_MODULE_DDK_BUILD := true
+LOCAL_MODULE_DDK_ALLOW_UNSAFE_HEADERS := true
+
 DLKM_DIR := $(TOP)/device/qcom/common/dlkm
 
 #KBUILD_OPTIONS
@@ -28,4 +33,3 @@ include $(DLKM_DIR)/Build_external_kernelmodule.mk
 #LOCAL_EAVB_PATH := $(LOCAL_PATH)
 #include $(call first-makefiles-under,$(LOCAL_EAVB_PATH))
 #endif
-
