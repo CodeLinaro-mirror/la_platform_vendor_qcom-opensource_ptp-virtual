@@ -47,6 +47,7 @@
 #include <linux/io.h>
 #include <linux/time.h>
 #include <linux/math64.h>
+#include <linux/version.h>
 
 #define QTIMER_PASS_THRU
 #define GPTP_GVM_SHM_MODE
@@ -619,16 +620,21 @@ static int ptp_virtual_probe(struct platform_device *pdev)
     return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
+static void ptp_virtual_remove(struct platform_device *pdev)
+#else
 static int  ptp_virtual_remove(struct platform_device *pdev)
+#endif
 {
-    int ret = 0;
     PTP_VIRTUAL_DEBUG_L1("Entry:%s.\n", __func__);
 #ifdef PTP_READ_WTIH_VDEV
     ptp_clock_unregister(ptp_vm_clk);
     ptp_vm_clk = NULL;
 #endif
     PTP_VIRTUAL_DEBUG_L1("Exit:%s.\n", __func__);
-    return ret;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 10, 0)
+    return 0;
+#endif
 }
 
 static struct of_device_id ptp_virtual_match[] = {

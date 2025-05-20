@@ -2,7 +2,6 @@
 
 LOCAL_PATH := $(call my-dir)
 
-$(warning @@@@@ptp_virtual@@@@@@@)
 LOCAL_MODULE_DDK_BUILD := true
 LOCAL_MODULE_DDK_ALLOW_UNSAFE_HEADERS := true
 
