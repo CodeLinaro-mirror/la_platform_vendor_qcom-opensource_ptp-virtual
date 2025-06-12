@@ -23,9 +23,9 @@ LOCAL_MODULE_TAGS         := optional
 
 include $(DLKM_DIR)/Build_external_kernelmodule.mk
 
-ifneq (,$(filter msmnile_gvmq gen4_gvm gen4_gvm_gy gen5_gvm_gy, $(TARGET_BOARD_PLATFORM)$(TARGET_BOARD_SUFFIX)))
-include $(CLEAR_VARS)
-LOCAL_EAVB_PATH := $(LOCAL_PATH)
-include $(call first-makefiles-under,$(LOCAL_EAVB_PATH))
-endif
+#ifneq (,$(filter msmnile_gvmq gen4_gvm gen4_gvm_gy gen5_gvm_gy, $(TARGET_BOARD_PLATFORM)$(TARGET_BOARD_SUFFIX)))
+#include $(CLEAR_VARS)
+#LOCAL_EAVB_PATH := $(LOCAL_PATH)
+#include $(call first-makefiles-under,$(LOCAL_EAVB_PATH))
+#endif
 
