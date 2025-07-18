@@ -36,3 +36,5 @@ def define_target_variant_module(target, variant):
 
 def define_target_module(target):
     define_target_variant_module(target, "perf")
+    define_target_variant_module(target, "consolidate")
+    define_target_variant_module(target, "gki")
