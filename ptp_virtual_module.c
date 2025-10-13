@@ -47,6 +47,7 @@
 #include <linux/io.h>
 #include <linux/time.h>
 #include <linux/math64.h>
+#include <linux/version.h>
 
 #define QTIMER_PASS_THRU
 #define GPTP_GVM_SHM_MODE
@@ -312,7 +313,7 @@ static int ptp_virtual_setup_passthrough(struct platform_device *pdev)
     if (res) {
         ntnbase = res->start;
         ntnbase_size = resource_size(res);
-        PTP_VIRTUAL_ALERT("%s: read ntnbase: 0x%0x size: 0x%x\n",
+        PTP_VIRTUAL_ALERT("%s: read ntnbase: 0x%0llx size: 0x%llx\n",
                           __func__, ntnbase, ntnbase_size);
     } else {
         PTP_VIRTUAL_ALERT("%s: get ptp_virtual ntnbase resource failed\n", __func__);
@@ -324,7 +325,7 @@ static int ptp_virtual_setup_passthrough(struct platform_device *pdev)
     if (res) {
         qtmraddr = res->start;
         qtmraddr_size = resource_size(res);
-        PTP_VIRTUAL_ALERT("%s: read qtmraddr: 0x%0x size: 0x%x\n",
+        PTP_VIRTUAL_ALERT("%s: read qtmraddr: 0x%0llx size: 0x%llx\n",
                           __func__, qtmraddr, qtmraddr_size);
     } else {
         PTP_VIRTUAL_ALERT("%s: get ptp_virtual qtimer_reg resource failed\n", __func__);
@@ -471,7 +472,7 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
                          d_status);
 
     if (cur_gptp == 0) {
-        PTP_VIRTUAL_ALERT("%s: unable to fetch current gptp time %ld", __func__,
+        PTP_VIRTUAL_ALERT("%s: unable to fetch current gptp time %llu", __func__,
                           cur_gptp);
         return -EINVAL;
     }
@@ -513,12 +514,12 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
 }
 #endif
 
-static int PTP_VM_adjust_freq(struct ptp_clock_info *ptp, s32 ppb)
+/*static int PTP_VM_adjust_freq(struct ptp_clock_info *ptp, s32 ppb)
 {
     PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
     PTP_VIRTUAL_DEBUG_L1("Exit: %s.\n", __func__);
     return 0;
-}
+}*/
 
 static int PTP_VM_adjust_time(struct ptp_clock_info *ptp, s64 delta)
 {
@@ -551,7 +552,7 @@ static struct ptp_clock_info PTP_VM_ptp_clock_ops = {
     .n_ext_ts = 0,  /* the number of externel time stamp channels */
     .n_per_out = 0, /* the number of programmable periodic signals */
     .pps = 0,   /* indicates whether the clk supports a PPS callback */
-    .adjfreq = PTP_VM_adjust_freq,
+    //.adjfreq = PTP_VM_adjust_freq,
     .adjtime = PTP_VM_adjust_time,
 #if ( (LINUX_VERSION_CODE) > (KERNEL_VERSION(4,1,0)) )
     .gettime64 = PTP_VM_get_time,
@@ -576,7 +577,7 @@ static int ptp_virtual_get_dts_config(struct platform_device *pdev)
     if (res) {
         carveout_memory_address = res->start;
         carveout_memory_size = resource_size(res);
-        PTP_VIRTUAL_ALERT("%s: read reserved-addr: 0x%0x size: 0x%x\n",
+        PTP_VIRTUAL_ALERT("%s: read reserved-addr: 0x%0llx size: 0x%llx\n",
                           __func__, carveout_memory_address, carveout_memory_size);
     } else {
         PTP_VIRTUAL_ALERT("%s: get ptp_virtual register resource failed\n", __func__);
@@ -619,16 +620,21 @@ static int ptp_virtual_probe(struct platform_device *pdev)
     return ret;
 }
 
-static int ptp_virtual_remove(struct platform_device *pdev)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
+static void ptp_virtual_remove(struct platform_device *pdev)
+#else
+static int  ptp_virtual_remove(struct platform_device *pdev)
+#endif
 {
-    int ret = 0;
     PTP_VIRTUAL_DEBUG_L1("Entry:%s.\n", __func__);
 #ifdef PTP_READ_WTIH_VDEV
     ptp_clock_unregister(ptp_vm_clk);
     ptp_vm_clk = NULL;
 #endif
     PTP_VIRTUAL_DEBUG_L1("Exit:%s.\n", __func__);
-    return ret;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 10, 0)
+    return 0;
+#endif
 }
 
 static struct of_device_id ptp_virtual_match[] = {
@@ -761,7 +767,7 @@ static int __init ptp_virtual_init(void)
         virtbase = ioremap(ntnbase, 0x1000);
     }
 
-    PTP_VIRTUAL_ALERT("%s: virtbase: %0x %0x\n", __func__, virtbase, ntnbase);
+    PTP_VIRTUAL_ALERT("%s: virtbase: %p %0llx\n", __func__, virtbase, ntnbase);
 #ifdef QTIMER_PASS_THRU
 
     if (!qtmraddr) {
@@ -770,13 +776,13 @@ static int __init ptp_virtual_init(void)
         qtimer_virtbase = ioremap(qtmraddr, QTMR0_F0V2_QTMR_V2_SIZE);
     }
 
-    PTP_VIRTUAL_ALERT("%s: qtimer_virtbase: %0x %0x\n", __func__, qtimer_virtbase,
+    PTP_VIRTUAL_ALERT("%s: qtimer_virtbase: %p %0llx\n", __func__, qtimer_virtbase,
                       qtmraddr);
 
     if (carveout_memory_address) {
         gptp_virtbase = memremap(carveout_memory_address, 0x1000,
                                  MEMREMAP_WB);//ioremap(carveout_memory_address, 0x1000);
-        PTP_VIRTUAL_ALERT("%s: gptp_virtbase memremap: %0x %0x\n", __func__,
+        PTP_VIRTUAL_ALERT("%s: gptp_virtbase memremap: %p %0llx\n", __func__,
                           gptp_virtbase,
                           carveout_memory_address);
     }
