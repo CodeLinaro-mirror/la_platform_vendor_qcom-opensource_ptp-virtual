@@ -464,7 +464,7 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
                                            unsigned long long)qtimer_inc_ratio_hi << 32));
 
         if (qtimer_inc_ratio > 1200000000ULL || qtimer_inc_ratio < 980000000ULL) {
-            PTP_VIRTUAL_ALERT("%s: qtimer_inc_ratio beyond limits %ld", __func__,
+            PTP_VIRTUAL_ALERT("%s: qtimer_inc_ratio beyond limits %lld", __func__,
                               qtimer_inc_ratio);
             qtimer_inc_ratio =
                 1000000000ULL; //this is just to make sure we dont see huge jumps
