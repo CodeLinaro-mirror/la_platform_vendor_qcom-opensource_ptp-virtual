@@ -64,6 +64,7 @@
 #define PTP_VIRTUAL_DEBUG_L1(...)
 #endif
 #define PTP_VIRTUAL_ALERT(...) printk(KERN_ERR __VA_ARGS__)
+#define PTP_VIRTUAL_INFO(...)  printk(KERN_INFO __VA_ARGS__)
 
 #ifdef PTP_READ_WTIH_SOCKET
 #define PTP_VM_get_time PTP_VM_get_time_with_socket
@@ -78,6 +79,10 @@
 #endif
 
 struct ptp_clock * ptp_vm_clk;
+static unsigned long long g_prev_gptp = 0;
+static uint64_t q_prev_qtimer_ns = 0;
+static long long g_prev_gptp_sync_val = 0;
+static long long g_prev_qtimer_sync_val = 0;
 
 #ifdef PTP_READ_WTIH_SOCKET
 #define GET_PTP_TS 101
@@ -457,8 +462,16 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
                                           unsigned long long)qtimer_sync_hi << 32));
         qtimer_inc_ratio = (long long)((unsigned long long)qtimer_inc_ratio_lo | ((
                                            unsigned long long)qtimer_inc_ratio_hi << 32));
-        cur_gptp = (unsigned long long)(gptp_sync_val + div64_u64(((cur_qtimer_ns -
-                                        qtimer_sync_val) * qtimer_inc_ratio), 1000000000));
+
+        if (qtimer_inc_ratio > 1200000000ULL || qtimer_inc_ratio < 980000000ULL) {
+            PTP_VIRTUAL_ALERT("%s: qtimer_inc_ratio beyond limits %lld", __func__,
+                              qtimer_inc_ratio);
+            qtimer_inc_ratio =
+                1000000000ULL; //this is just to make sure we dont see huge jumps
+        }
+
+        cur_gptp = (unsigned long long)(gptp_sync_val + mul_u64_u64_div_u64((
+                                            cur_qtimer_ns - qtimer_sync_val), qtimer_inc_ratio, 1000000000ULL));
         ts->tv_sec = div_u64_rem(cur_gptp, 1000000000ULL, &reminder);
         ts->tv_nsec = reminder;
     }
@@ -466,10 +479,10 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
     iowrite64(before64 + div64_u64(monodiff, 2), monolithic_mem);
     iowrite64(before_boottime_64 + div64_u64(bootdiff, 2), boot_time_mem);
     iowrite64(cur_gptp, cur_gptp_mem);
-    PTP_VIRTUAL_DEBUG_L1("%s: cur_gptp_ns: %lld cur_qtimer_ns %lld monotonic_time_ns %lld boot_time_ns %lld gptp_sync_val %lld qtimer_sync_val %lld d_status %x",
+    PTP_VIRTUAL_DEBUG_L1("%s: cur_gptp_ns: %lld cur_qtimer_ns %lld monotonic_time_ns %lld boot_time_ns %lld gptp_sync_val %lld qtimer_sync_val %lld qtimer_inc_ratio %lld d_status %x",
                          __func__, cur_gptp, cur_qtimer_ns, before64 + div64_u64(monodiff, 2),
                          before_boottime_64 + div64_u64(bootdiff, 2), gptp_sync_val,  qtimer_sync_val,
-                         d_status);
+                         qtimer_inc_ratio, d_status);
 
     if (cur_gptp == 0) {
         PTP_VIRTUAL_ALERT("%s: unable to fetch current gptp time %llu", __func__,
@@ -477,6 +490,23 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
         return -EINVAL;
     }
 
+    if ( (cur_gptp < g_prev_gptp) || ((cur_gptp - g_prev_gptp) >= 2000000000ULL)
+            || (cur_qtimer_ns < q_prev_qtimer_ns)
+            || ((cur_qtimer_ns - q_prev_qtimer_ns) >= 2000000000ULL)
+            || (gptp_sync_val < g_prev_gptp_sync_val)
+            || ((gptp_sync_val - g_prev_gptp_sync_val) >= 2000000000ULL)
+            || (qtimer_sync_val < g_prev_qtimer_sync_val)
+            || ((qtimer_sync_val - g_prev_qtimer_sync_val) >= 2000000000ULL) ) {
+        PTP_VIRTUAL_INFO("%s: cur_gptp_ns: %lld g_prev_gptp: %lld cur_qtimer_ns %lld q_prev_qtimer_ns: %lld monotonic_time_ns %lld gptp_sync_val %lld g_prev_gptp_sync_val: %lld qtimer_sync_val %lld  g_prev_qtimer_sync_val: %lld  qtimer_inc_ratio: %lld d_status %x",
+                         __func__, cur_gptp, g_prev_gptp, cur_qtimer_ns, q_prev_qtimer_ns,
+                         before64 + div64_u64(monodiff, 2), gptp_sync_val, g_prev_gptp_sync_val,
+                         qtimer_sync_val,  g_prev_qtimer_sync_val, qtimer_inc_ratio, d_status);
+    }
+
+    g_prev_gptp = cur_gptp;
+    q_prev_qtimer_ns = cur_qtimer_ns;
+    g_prev_gptp_sync_val = gptp_sync_val;
+    g_prev_qtimer_sync_val = qtimer_sync_val;
     return 0;
 #endif
     PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
