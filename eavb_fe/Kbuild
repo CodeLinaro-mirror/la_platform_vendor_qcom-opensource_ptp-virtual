@@ -1,4 +1,0 @@
-obj-m := eavb_fe.o
-
-eavb_fe-y := virtio_eavb.o
-BOARD_VENDOR_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/eavb_fe.ko
