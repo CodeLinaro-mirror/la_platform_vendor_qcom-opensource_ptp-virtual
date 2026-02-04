@@ -57,6 +57,7 @@
 //#define MEASURE_ROUNDTRIP_TIME
 #define PTP_READ_WTIH_PASS_THRU
 #define PTP_MV_SYSCLOCK    125000000
+#define MAX_RETRY_COUNT    (3)
 
 #ifdef DEBUG_ENABLED
 #define PTP_VIRTUAL_DEBUG_L1(...) printk(KERN_ALERT __VA_ARGS__)
@@ -395,7 +396,13 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
 		after64 = ktime_to_ns(after);
 		monodiff = after64 - before64;
 		count++;
-	} while (monodiff > 20000 && count < 3);
+	} while (monodiff > 20000 && count < MAX_RETRY_COUNT);
+
+	if(count >= MAX_RETRY_COUNT) {
+		ts->tv_sec = 0;
+		ts->tv_nsec = 0;
+		return 0;
+	}
 
 	//multiple by the tick factor.	(1000000000/19200000)
 	cur_qtimer_ns = cur_qtimer_ns*100;
