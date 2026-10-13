@@ -47,6 +47,7 @@
 #include <linux/io.h>
 #include <linux/time.h>
 #include <linux/math64.h>
+#include <linux/version.h>
 
 #define QTIMER_PASS_THRU
 #define GPTP_GVM_SHM_MODE
@@ -56,6 +57,7 @@
 //#define MEASURE_ROUNDTRIP_TIME
 #define PTP_READ_WTIH_PASS_THRU
 #define PTP_MV_SYSCLOCK    125000000
+#define MAX_RETRY_COUNT    (3)
 
 #ifdef DEBUG_ENABLED
 #define PTP_VIRTUAL_DEBUG_L1(...) printk(KERN_ALERT __VA_ARGS__)
@@ -394,7 +396,13 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
 		after64 = ktime_to_ns(after);
 		monodiff = after64 - before64;
 		count++;
-	} while (monodiff > 20000 && count < 3);
+	} while (monodiff > 20000 && count < MAX_RETRY_COUNT);
+
+	if(count >= MAX_RETRY_COUNT) {
+		ts->tv_sec = 0;
+		ts->tv_nsec = 0;
+		return 0;
+	}
 
 	//multiple by the tick factor.	(1000000000/19200000)
 	cur_qtimer_ns = cur_qtimer_ns*100;
@@ -452,12 +460,14 @@ static int PTP_VM_get_time_with_pass_through(struct ptp_clock_info *ptp,
 }
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 10, 0)
 static int PTP_VM_adjust_freq(struct ptp_clock_info *ptp, s32 ppb)
 {
 	PTP_VIRTUAL_DEBUG_L1("Entry: %s.\n", __func__);
 	PTP_VIRTUAL_DEBUG_L1("Exit: %s.\n", __func__);
 	return 0;
 }
+#endif
 
 static int PTP_VM_adjust_time(struct ptp_clock_info *ptp, s64 delta)
 {
@@ -490,7 +500,9 @@ static struct ptp_clock_info PTP_VM_ptp_clock_ops = {
 	.n_ext_ts = 0,  /* the number of externel time stamp channels */
 	.n_per_out = 0, /* the number of programmable periodic signals */
 	.pps = 0,   /* indicates whether the clk supports a PPS callback */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 10, 0)
 	.adjfreq = PTP_VM_adjust_freq,
+#endif
 	.adjtime = PTP_VM_adjust_time,
 #if ( (LINUX_VERSION_CODE) > (KERNEL_VERSION(4,1,0)) )
 	.gettime64 = PTP_VM_get_time,
@@ -558,16 +570,21 @@ static int ptp_virtual_probe(struct platform_device *pdev)
 	return ret;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
+static void ptp_virtual_remove(struct platform_device *pdev)
+#else
 static int ptp_virtual_remove(struct platform_device *pdev)
+#endif
 {
-	int ret = 0;
 	PTP_VIRTUAL_DEBUG_L1("Entry:%s.\n", __func__);
 #ifdef PTP_READ_WTIH_VDEV
 	ptp_clock_unregister(ptp_vm_clk);
 	ptp_vm_clk = NULL;
 #endif
 	PTP_VIRTUAL_DEBUG_L1("Exit:%s.\n", __func__);
-	return ret;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 10, 0)
+	return 0;
+#endif
 }
 
 static struct of_device_id ptp_virtual_match[] = {
